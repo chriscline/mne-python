@@ -8,7 +8,12 @@
 
 """Create high-resolution head surfaces for coordinate alignment.
 
-example usage: mne make_scalp_surfaces --overwrite --subject sample
+Examples
+--------
+.. code-block:: console
+
+    $ mne make_scalp_surfaces --overwrite --subject sample
+
 """
 import os
 import copy
@@ -60,7 +65,7 @@ def run():
 
 @verbose
 def _run(subjects_dir, subject, force, overwrite, no_decimate, verbose=None):
-    this_env = copy.copy(os.environ)
+    this_env = copy.deepcopy(os.environ)
     subjects_dir = get_subjects_dir(subjects_dir, raise_error=True)
     this_env['SUBJECTS_DIR'] = subjects_dir
     this_env['SUBJECT'] = subject
@@ -102,9 +107,11 @@ def _run(subjects_dir, subject, force, overwrite, no_decimate, verbose=None):
     dense_fname = op.join(bem_dir, '%s-head-dense.fif' % subject)
     logger.info('2. Creating %s ...' % dense_fname)
     _check_file(dense_fname, overwrite)
+    # Helpful message if we get a topology error
+    msg = '\n\nConsider using --force as an additional input parameter.'
     surf = mne.bem._surfaces_to_bem(
         [surf], [mne.io.constants.FIFF.FIFFV_BEM_SURF_ID_HEAD], [1],
-        incomplete=incomplete)[0]
+        incomplete=incomplete, extra=msg)[0]
     mne.write_bem_surfaces(dense_fname, surf)
     levels = 'medium', 'sparse'
     tris = [] if no_decimate else [30000, 2500]
@@ -123,7 +130,7 @@ def _run(subjects_dir, subject, force, overwrite, no_decimate, verbose=None):
         dec_surf = mne.bem._surfaces_to_bem(
             [dict(rr=points, tris=tris)],
             [mne.io.constants.FIFF.FIFFV_BEM_SURF_ID_HEAD], [1], rescale=False,
-            incomplete=incomplete)
+            incomplete=incomplete, extra=msg)
         mne.write_bem_surfaces(dec_fname, dec_surf)
 
 

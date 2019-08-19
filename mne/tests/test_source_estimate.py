@@ -5,10 +5,8 @@ import numpy as np
 from numpy.testing import (assert_array_almost_equal, assert_array_equal,
                            assert_allclose, assert_equal)
 import pytest
-from scipy.fftpack import fft
 from scipy import sparse
 
-from mne.datasets import testing
 from mne import (stats, SourceEstimate, VectorSourceEstimate,
                  VolSourceEstimate, Label, read_source_spaces,
                  read_evokeds, MixedSourceEstimate, find_events, Epochs,
@@ -17,9 +15,10 @@ from mne import (stats, SourceEstimate, VectorSourceEstimate,
                  spatio_temporal_src_connectivity,
                  spatial_inter_hemi_connectivity,
                  spatial_src_connectivity, spatial_tris_connectivity,
-                 SourceSpaces)
+                 SourceSpaces, VolVectorSourceEstimate)
+from mne.datasets import testing
+from mne.fixes import fft
 from mne.source_estimate import grade_to_tris, _get_vol_mask
-
 from mne.minimum_norm import (read_inverse_operator, apply_inverse,
                               apply_inverse_epochs)
 from mne.label import read_labels_from_annot, label_sign_flip
@@ -93,18 +92,32 @@ def test_volume_stc():
     tempdir = _TempDir()
     N = 100
     data = np.arange(N)[:, np.newaxis]
-    datas = [data, data, np.arange(2)[:, np.newaxis]]
+    datas = [data,
+             data,
+             np.arange(2)[:, np.newaxis],
+             np.arange(6).reshape(2, 3, 1)]
     vertno = np.arange(N)
-    vertnos = [vertno, vertno[:, np.newaxis], np.arange(2)[:, np.newaxis]]
-    vertno_reads = [vertno, vertno, np.arange(2)]
+    vertnos = [vertno,
+               vertno[:, np.newaxis],
+               np.arange(2)[:, np.newaxis],
+               np.arange(2)]
+    vertno_reads = [vertno, vertno, np.arange(2), np.arange(2)]
     for data, vertno, vertno_read in zip(datas, vertnos, vertno_reads):
-        stc = VolSourceEstimate(data, vertno, 0, 1)
-        fname_temp = op.join(tempdir, 'temp-vl.stc')
+        if data.ndim in (1, 2):
+            stc = VolSourceEstimate(data, vertno, 0, 1)
+            ext = 'stc'
+            klass = VolSourceEstimate
+        else:
+            assert data.ndim == 3
+            stc = VolVectorSourceEstimate(data, vertno, 0, 1)
+            ext = 'h5'
+            klass = VolVectorSourceEstimate
+        fname_temp = op.join(tempdir, 'temp-vl.' + ext)
         stc_new = stc
         for _ in range(2):
             stc_new.save(fname_temp)
             stc_new = read_source_estimate(fname_temp)
-            assert (isinstance(stc_new, VolSourceEstimate))
+            assert isinstance(stc_new, klass)
             assert_array_equal(vertno_read, stc_new.vertices)
             assert_array_almost_equal(stc.data, stc_new.data)
 
@@ -296,6 +309,14 @@ def test_stc_attributes():
     stc._sens_data = np.zeros((2, 3))
     stc._data = None
     assert_equal(stc.shape, (2, 3))
+
+    # bad size of data
+    stc = _fake_stc()
+    data = stc.data[:, np.newaxis, :]
+    with pytest.raises(ValueError, match='2 dimensions for SourceEstimate'):
+        SourceEstimate(data, stc.vertices)
+    stc = SourceEstimate(data[:, 0, 0], stc.vertices, 0, 1)
+    assert stc.data.shape == (len(data), 1)
 
 
 def test_io_stc():
@@ -538,7 +559,8 @@ def test_extract_label_time_course():
     for mode in modes:
         label_tc = extract_label_time_course(stcs, labels, src, mode=mode)
         label_tc_method = [stc.extract_label_time_course(labels, src,
-                           mode=mode) for stc in stcs]
+                                                         mode=mode)
+                           for stc in stcs]
         assert (len(label_tc) == n_stcs)
         assert (len(label_tc_method) == n_stcs)
         for tc1, tc2 in zip(label_tc, label_tc_method):
@@ -596,6 +618,10 @@ def test_transform_data():
                                             tmin_idx=tmin_idx,
                                             tmax_idx=tmax_idx)
             assert_allclose(data_f, stc_data_t)
+    # bad sens_data
+    sens_data = sens_data[..., np.newaxis]
+    with pytest.raises(ValueError, match='sensor data must have 2'):
+        VolSourceEstimate((kernel, sens_data), vertices)
 
 
 def test_transform():
@@ -725,6 +751,12 @@ def test_to_data_frame():
             assert all([c in ['time', 'subject'] for c in
                         df.reset_index().columns][:2])
 
+        df = stc.to_data_frame(long_format=True)
+        assert(len(df) == stc.data.size)
+        assert("time" in df.columns)
+        assert("source" in df.columns)
+        assert("observation" in df.columns)
+
 
 def test_get_peak():
     """Test peak getter."""
@@ -791,24 +823,30 @@ def test_mixed_stc():
     assert isinstance(stc_out, MixedSourceEstimate)
 
 
-def test_vec_stc():
-    """Test vector source estimate."""
+@pytest.mark.parametrize('klass',
+                         (VectorSourceEstimate, VolVectorSourceEstimate))
+def test_vec_stc(klass):
+    """Test (vol)vector source estimate."""
     nn = np.array([
         [1, 0, 0],
         [0, 1, 0],
         [0, 0, 1],
         [np.sqrt(1 / 3.)] * 3
     ])
-    src = [dict(nn=nn[:2]), dict(nn=nn[2:])]
 
-    verts = [np.array([0, 1]), np.array([0, 1])]
     data = np.array([
         [1, 0, 0],
         [0, 2, 0],
         [3, 0, 0],
         [1, 1, 1],
     ])[:, :, np.newaxis]
-    stc = VectorSourceEstimate(data, verts, 0, 1, 'foo')
+    if klass is VolVectorSourceEstimate:
+        src = [dict(nn=nn)]
+        verts = np.arange(4)
+    else:
+        src = [dict(nn=nn[:2]), dict(nn=nn[2:])]
+        verts = [np.array([0, 1]), np.array([0, 1])]
+    stc = klass(data, verts, 0, 1, 'foo')
 
     # Magnitude of the vectors
     assert_array_equal(stc.magnitude().data[:, 0], [1, 2, 3, np.sqrt(3)])
@@ -816,6 +854,15 @@ def test_vec_stc():
     # Vector components projected onto the vertex normals
     normal = stc.normal(src)
     assert_array_equal(normal.data[:, 0], [1, 2, 0, np.sqrt(3)])
+
+    stc = klass(data[:, :, 0], verts, 0, 1)  # upbroadcast
+    assert stc.data.shape == (len(data), 3, 1)
+    # Bad data
+    with pytest.raises(ValueError, match='of length 3'):
+        klass(data[:, :2], verts, 0, 1)
+    data = data[:, :, np.newaxis]
+    with pytest.raises(ValueError, match='3 dimensions for .*VectorSource'):
+        klass(data, verts, 0, 1)
 
 
 @testing.requires_testing_data

@@ -21,10 +21,11 @@ from mne.io import (read_fiducials, write_fiducials, _coil_trans_to_loc,
                     anonymize_info)
 from mne.io.constants import FIFF
 from mne.io.write import DATE_NONE
-from mne.io.meas_info import (Info, create_info, _write_dig_points,
-                              _read_dig_points, _make_dig_points, _merge_info,
+from mne.io.meas_info import (Info, create_info, _merge_info,
                               _force_update_info, RAW_INFO_FIELDS,
                               _bad_chans_comp, _get_valid_units)
+from mne.digitization._utils import (_write_dig_points, _read_dig_points,
+                                     _make_dig_points,)
 from mne.io import read_raw_ctf
 from mne.utils import _TempDir, run_tests_if_main, catch_logging
 from mne.channels.montage import read_montage, read_dig_montage
@@ -69,7 +70,7 @@ def test_make_info():
     info = create_info(n_ch, 1000., 'eeg')
     assert set(info.keys()) == set(RAW_INFO_FIELDS)
 
-    coil_types = set([ch['coil_type'] for ch in info['chs']])
+    coil_types = {ch['coil_type'] for ch in info['chs']}
     assert FIFF.FIFFV_COIL_EEG in coil_types
 
     pytest.raises(TypeError, create_info, ch_names='Test Ch', sfreq=1000)
@@ -78,7 +79,7 @@ def test_make_info():
                   ch_types=['eeg', 'eeg'])
     pytest.raises(TypeError, create_info, ch_names=[np.array([1])],
                   sfreq=1000)
-    pytest.raises(TypeError, create_info, ch_names=['Test Ch'], sfreq=1000,
+    pytest.raises(KeyError, create_info, ch_names=['Test Ch'], sfreq=1000,
                   ch_types=np.array([1]))
     pytest.raises(KeyError, create_info, ch_names=['Test Ch'], sfreq=1000,
                   ch_types='awesome')
@@ -113,6 +114,17 @@ def test_make_info():
     assert info['meas_date'] is None
 
 
+def test_duplicate_name_correction():
+    """Test duplicate channel names with running number."""
+    # When running number is possible
+    info = create_info(['A', 'A', 'A'], 1000., verbose='error')
+    assert info['ch_names'] == ['A-0', 'A-1', 'A-2']
+
+    # When running number is not possible
+    with pytest.raises(ValueError, match='Adding a running number'):
+        create_info(['A', 'A', 'A-0'], 1000., verbose='error')
+
+
 def test_fiducials_io():
     """Test fiducials i/o."""
     tempdir = _TempDir()
@@ -141,8 +153,7 @@ def test_info():
     event_id, tmin, tmax = 1, -0.2, 0.5
     events = read_events(event_name)
     event_id = int(events[0, 2])
-    epochs = Epochs(raw, events[:1], event_id, tmin, tmax, picks=None,
-                    baseline=(None, 0))
+    epochs = Epochs(raw, events[:1], event_id, tmin, tmax, picks=None)
 
     evoked = epochs.average()
 
@@ -159,7 +170,17 @@ def test_info():
         info_str = '%s' % obj.info
         assert len(info_str.split('\n')) == len(obj.info.keys()) + 2
         assert all(k in info_str for k in obj.info.keys())
-        assert '2002-12-03 19:01:10 GMT' in repr(obj.info), repr(obj.info)
+        rep = repr(obj.info)
+        assert '2002-12-03 19:01:10 GMT' in rep, rep
+        assert '146 items (3 Cardinal, 4 HPI, 61 EEG, 78 Extra)' in rep
+        dig_rep = repr(obj.info['dig'][0])
+        assert 'LPA' in dig_rep, dig_rep
+        assert '(-71.4, 0.0, 0.0) mm' in dig_rep, dig_rep
+        assert 'head frame' in dig_rep, dig_rep
+        # Test our BunchConstNamed support
+        for func in (str, repr):
+            assert '4 (FIFFV_COORD_HEAD)' == \
+                func(obj.info['dig'][0]['coord_frame'])
 
     # Test read-only fields
     info = raw.info.copy()
@@ -485,7 +506,7 @@ def test_anonymize():
 
     # Test instance method
     events = read_events(event_name)
-    epochs = Epochs(raw, events[:1], 2, 0., 0.1)
+    epochs = Epochs(raw, events[:1], 2, 0., 0.1, baseline=None)
 
     assert not any(_is_anonymous(raw))
     raw.anonymize()

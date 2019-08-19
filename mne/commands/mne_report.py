@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 r"""Create mne report for a folder.
 
-Example usage
+Examples
+--------
+.. code-block:: console
 
-mne report -p MNE-sample-data/ -i \
-MNE-sample-data/MEG/sample/sample_audvis-ave.fif -d MNE-sample-data/subjects/ \
--s sample
+    $ mne report -p MNE-sample-data/ \
+        -i MNE-sample-data/MEG/sample/sample_audvis-ave.fif \
+        -d MNE-sample-data/subjects/ \
+        -s sample
 
 """
 
@@ -46,8 +49,6 @@ def run():
                       help="The subjects directory")
     parser.add_option("-s", "--subject", dest="subject",
                       help="The subject name")
-    parser.add_option("-v", "--verbose", dest="verbose",
-                      action='store_true', help="run in verbose mode")
     parser.add_option("--no-browser", dest="no_browser", action='store_false',
                       help="Do not open MNE-Report in browser")
     parser.add_option("--overwrite", dest="overwrite", action='store_false',
@@ -60,6 +61,8 @@ def run():
     parser.add_option("--image-format", type="str", dest="image_format",
                       default='png', help="Image format to use "
                       "(can be 'png' or 'svg')")
+    parser.add_option("-v", "--verbose", dest="verbose",
+                      action='store_true', help="run in verbose mode")
 
     options, args = parser.parse_args()
     path = options.path

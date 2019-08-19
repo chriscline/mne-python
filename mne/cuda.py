@@ -4,6 +4,7 @@
 
 import numpy as np
 
+from .fixes import rfft, irfft
 from .utils import (sizeof_fmt, logger, get_config, warn, _explain_exception,
                     verbose)
 
@@ -50,10 +51,7 @@ def init_cuda(ignore_config=False, verbose=None):
     ----------
     ignore_config : bool
         If True, ignore the config value MNE_USE_CUDA and force init.
-    verbose : bool, str, int, or None
-        If not None, override default verbose level (see :func:`mne.verbose`
-        and :ref:`Logging documentation <tut_logging>` for more). Defaults to
-        self.verbose.
+    %(verbose)s
     """
     global _cuda_capable
     if _cuda_capable:
@@ -85,7 +83,8 @@ def init_cuda(ignore_config=False, verbose=None):
 ###############################################################################
 # Repeated FFT multiplication
 
-def _setup_cuda_fft_multiply_repeated(n_jobs, h, n_fft):
+def _setup_cuda_fft_multiply_repeated(n_jobs, h, n_fft,
+                                      kind='FFT FIR filtering'):
     """Set up repeated CUDA FFT multiplication with a given filter.
 
     Parameters
@@ -97,6 +96,8 @@ def _setup_cuda_fft_multiply_repeated(n_jobs, h, n_fft):
         The filtering function that will be used repeatedly.
     n_fft : int
         The number of points in the FFT.
+    kind : str
+        The kind to report to the user.
 
     Returns
     -------
@@ -123,8 +124,8 @@ def _setup_cuda_fft_multiply_repeated(n_jobs, h, n_fft):
     -----
     This function is designed to be used with fft_multiply_repeated().
     """
-    cuda_dict = dict(n_fft=n_fft, rfft=np.fft.rfft, irfft=np.fft.irfft,
-                     h_fft=np.fft.rfft(h, n=n_fft))
+    cuda_dict = dict(n_fft=n_fft, rfft=rfft, irfft=irfft,
+                     h_fft=rfft(h, n=n_fft))
     if n_jobs == 'cuda':
         n_jobs = 1
         init_cuda()
@@ -133,7 +134,7 @@ def _setup_cuda_fft_multiply_repeated(n_jobs, h, n_fft):
             try:
                 # do the IFFT normalization now so we don't have to later
                 h_fft = cupy.array(cuda_dict['h_fft'])
-                logger.info('Using CUDA for FFT FIR filtering')
+                logger.info('Using CUDA for %s' % kind)
             except Exception as exp:
                 logger.info('CUDA not used, could not instantiate memory '
                             '(arrays may be too large: "%s"), falling back to '
@@ -215,7 +216,7 @@ def _setup_cuda_fft_resample(n_jobs, W, new_len):
     -----
     This function is designed to be used with fft_resample().
     """
-    cuda_dict = dict(use_cuda=False, rfft=np.fft.rfft, irfft=np.fft.irfft)
+    cuda_dict = dict(use_cuda=False, rfft=rfft, irfft=irfft)
     rfft_len_x = len(W) // 2 + 1
     # fold the window onto inself (should be symmetric) and truncate
     W = W.copy()
@@ -245,16 +246,16 @@ def _setup_cuda_fft_resample(n_jobs, W, new_len):
     return n_jobs, cuda_dict
 
 
-def _cuda_upload_rfft(x, n):
+def _cuda_upload_rfft(x, n, axis=-1):
     """Upload and compute rfft."""
     import cupy
-    return cupy.fft.rfft(cupy.array(x), n)
+    return cupy.fft.rfft(cupy.array(x), n=n, axis=axis)
 
 
-def _cuda_irfft_get(x, n):
+def _cuda_irfft_get(x, n, axis=-1):
     """Compute irfft and get."""
     import cupy
-    return cupy.fft.irfft(x, n).get()
+    return cupy.fft.irfft(x, n=n, axis=axis).get()
 
 
 def _fft_resample(x, new_len, npads, to_removes, cuda_dict=None,
@@ -324,7 +325,7 @@ def _smart_pad(x, n_pad, pad='reflect_limited'):
     if pad == 'reflect_limited':
         # need to pad with zeros if len(x) <= npad
         l_z_pad = np.zeros(max(n_pad[0] - len(x) + 1, 0), dtype=x.dtype)
-        r_z_pad = np.zeros(max(n_pad[0] - len(x) + 1, 0), dtype=x.dtype)
+        r_z_pad = np.zeros(max(n_pad[1] - len(x) + 1, 0), dtype=x.dtype)
         return np.concatenate([l_z_pad, 2 * x[0] - x[n_pad[0]:0:-1], x,
                                2 * x[-1] - x[-2:-n_pad[1] - 2:-1], r_z_pad])
     else:

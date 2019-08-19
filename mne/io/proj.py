@@ -100,7 +100,7 @@ class Projection(dict):
 
         Returns
         -------
-        fig : instance of matplotlib figure
+        fig : instance of Figure
             Figure distributing one image per channel across sensor topography.
 
         Notes
@@ -156,10 +156,7 @@ class ProjMixin(object):
             List with projection vectors.
         remove_existing : bool
             Remove the projection vectors currently in the file.
-        verbose : bool, str, int, or None
-            If not None, override default verbose level (see
-            :func:`mne.verbose` and :ref:`Logging documentation <tut_logging>`
-            for more).
+        %(verbose_meth)s
 
         Returns
         -------
@@ -287,12 +284,12 @@ class ProjMixin(object):
 
         Parameters
         ----------
-        ch_type : 'mag' | 'grad' | 'planar1' | 'planar2' | 'eeg' | None | List
+        ch_type : 'mag' | 'grad' | 'planar1' | 'planar2' | 'eeg' | None | list
             The channel type to plot. For 'grad', the gradiometers are collec-
             ted in pairs and the RMS for each pair is plotted. If None
             (default), it will return all channel types present. If a list of
             ch_types is provided, it will return multiple figures.
-        layout : None | Layout | List of Layouts
+        layout : None | Layout | list of Layout
             Layout instance specifying sensor positions (does not need to
             be specified for Neuromag data). If possible, the correct
             layout file is inferred from the data; if no appropriate layout
@@ -306,7 +303,7 @@ class ProjMixin(object):
 
         Returns
         -------
-        fig : instance of matplotlib figure
+        fig : instance of Figure
             Figure distributing one image per channel across sensor topography.
         """
         if self.info['projs'] is not None or len(self.info['projs']) != 0:
@@ -353,9 +350,7 @@ def _read_proj(fid, node, verbose=None):
         The file descriptor of the open file.
     node : tree node
         The node of the tree where to look.
-    verbose : bool, str, int, or None
-        If not None, override default verbose level (see :func:`mne.verbose`
-        and :ref:`Logging documentation <tut_logging>` for more).
+    %(verbose)s
 
     Returns
     -------
@@ -544,7 +539,7 @@ def make_projector(projs, ch_names, bads=(), include_active=True):
     nproj : int
         How many items in the projector.
     U : array
-        The orthogonal basis of the projection vectors (optional).
+        The orthogonal basis of the projection vectors.
     """
     return _make_projector(projs, ch_names, bads, include_active)
 
@@ -561,7 +556,7 @@ def _make_projector(projs, ch_names, bads=(), include_active=True,
     if nchan == 0:
         raise ValueError('No channel names specified')
 
-    default_return = (np.eye(nchan, nchan), 0, [])
+    default_return = (np.eye(nchan, nchan), 0, np.empty((nchan, 0)))
 
     #   Check trivial cases first
     if projs is None:
@@ -700,9 +695,7 @@ def activate_proj(projs, copy=True, verbose=None):
         The projectors.
     copy : bool
         Modify projs in place or operate on a copy.
-    verbose : bool, str, int, or None
-        If not None, override default verbose level (see :func:`mne.verbose`
-        and :ref:`Logging documentation <tut_logging>` for more).
+    %(verbose)s
 
     Returns
     -------
@@ -733,9 +726,7 @@ def deactivate_proj(projs, copy=True, verbose=None):
         The projectors.
     copy : bool
         Modify projs in place or operate on a copy.
-    verbose : bool, str, int, or None
-        If not None, override default verbose level (see :func:`mne.verbose`
-        and :ref:`Logging documentation <tut_logging>` for more).
+    %(verbose)s
 
     Returns
     -------
@@ -764,9 +755,7 @@ def make_eeg_average_ref_proj(info, activate=True, verbose=None):
         Measurement info.
     activate : bool
         If True projections are activated.
-    verbose : bool, str, int, or None
-        If not None, override default verbose level (see :func:`mne.verbose`
-        and :ref:`Logging documentation <tut_logging>` for more).
+    %(verbose)s
 
     Returns
     -------
@@ -840,9 +829,7 @@ def setup_proj(info, add_eeg_ref=True, activate=True, verbose=None):
         already exists).
     activate : bool
         If True projections are activated.
-    verbose : bool, str, int, or None
-        If not None, override default verbose level (see :func:`mne.verbose`
-        and :ref:`Logging documentation <tut_logging>` for more).
+    %(verbose)s
 
     Returns
     -------

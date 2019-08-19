@@ -16,18 +16,20 @@ import matplotlib.pyplot as plt
 from mne import (make_field_map, pick_channels_evoked, read_evokeds,
                  read_trans, read_dipole, SourceEstimate, VectorSourceEstimate,
                  VolSourceEstimate, make_sphere_model, use_coil_def,
-                 setup_volume_source_space, read_forward_solution)
+                 setup_volume_source_space, read_forward_solution,
+                 VolVectorSourceEstimate, convert_forward_solution)
 from mne.io import read_raw_ctf, read_raw_bti, read_raw_kit, read_info
-from mne.io.meas_info import write_dig
+from mne.digitization._utils import write_dig
 from mne.io.pick import pick_info
 from mne.io.constants import FIFF
 from mne.viz import (plot_sparse_source_estimates, plot_source_estimates,
                      snapshot_brain_montage, plot_head_positions,
-                     plot_alignment, plot_volume_source_estimates)
+                     plot_alignment, plot_volume_source_estimates,
+                     plot_sensors_connectivity)
 from mne.viz.utils import _fake_click
 from mne.utils import (requires_mayavi, requires_pysurfer, run_tests_if_main,
                        _import_mlab, requires_nibabel, check_version,
-                       traits_test, requires_version)
+                       traits_test, requires_version, catch_logging)
 from mne.datasets import testing
 from mne.source_space import read_source_spaces
 from mne.bem import read_bem_solution, read_bem_surfaces
@@ -94,9 +96,8 @@ def test_plot_head_positions():
 
 @testing.requires_testing_data
 @requires_pysurfer
-@requires_mayavi
 @traits_test
-def test_plot_sparse_source_estimates():
+def test_plot_sparse_source_estimates(renderer):
     """Test plotting of (sparse) source estimates."""
     sample_src = read_source_spaces(src_fname)
 
@@ -128,14 +129,16 @@ def test_plot_sparse_source_estimates():
     stc_data[1, 4] = 2.
     vertices = [vertices[inds], np.empty(0, dtype=np.int)]
     stc = SourceEstimate(stc_data, vertices, 1, 1)
-    plot_sparse_source_estimates(sample_src, stc, bgcolor=(1, 1, 1),
-                                 opacity=0.5, high_resolution=False)
+    surf = plot_sparse_source_estimates(sample_src, stc, bgcolor=(1, 1, 1),
+                                        opacity=0.5, high_resolution=False)
+    if renderer.get_3d_backend() == 'mayavi':
+        import mayavi  # noqa: F401 analysis:ignore
+        assert isinstance(surf, mayavi.modules.surface.Surface)
 
 
 @testing.requires_testing_data
-@requires_mayavi
 @traits_test
-def test_plot_evoked_field():
+def test_plot_evoked_field(renderer):
     """Test plotting evoked field."""
     evoked = read_evokeds(evoked_fname, condition='Left Auditory',
                           baseline=(-0.2, 0.0))
@@ -145,13 +148,16 @@ def test_plot_evoked_field():
             maps = make_field_map(evoked, trans_fname, subject='sample',
                                   subjects_dir=subjects_dir, n_jobs=1,
                                   ch_type=t)
-        evoked.plot_field(maps, time=0.1)
+        fig = evoked.plot_field(maps, time=0.1)
+        if renderer.get_3d_backend() == 'mayavi':
+            import mayavi  # noqa: F401 analysis:ignore
+            assert isinstance(fig, mayavi.core.scene.Scene)
 
 
+@pytest.mark.slowtest  # can be slow on OSX
 @testing.requires_testing_data
-@requires_mayavi
 @traits_test
-def test_plot_alignment(tmpdir):
+def test_plot_alignment(tmpdir, renderer):
     """Test plotting of -trans.fif files and MEG sensor layouts."""
     # generate fiducials file for testing
     tempdir = str(tmpdir)
@@ -164,7 +170,7 @@ def test_plot_alignment(tmpdir):
             'r': [0.08436285, -0.02850276, -0.04127743]}]
     write_dig(fiducials_path, fid, 5)
 
-    mlab = _import_mlab()
+    renderer._close_all()
     evoked = read_evokeds(evoked_fname)[0]
     sample_src = read_source_spaces(src_fname)
     bti = read_raw_bti(pdf_fname, config_fname, hs_fname, convert=True,
@@ -179,33 +185,34 @@ def test_plot_alignment(tmpdir):
         meg = ['helmet', 'sensors']
         if system == 'KIT':
             meg.append('ref')
-        plot_alignment(info, trans_fname, subject='sample',
-                       subjects_dir=subjects_dir, meg=meg)
-        mlab.close(all=True)
+        fig = plot_alignment(info, trans_fname, subject='sample',
+                             subjects_dir=subjects_dir, meg=meg)
+        rend = renderer._Renderer(fig=fig)
+        rend.close()
     # KIT ref sensor coil def is defined
-    mlab.close(all=True)
+    renderer._close_all()
     info = infos['Neuromag']
     pytest.raises(TypeError, plot_alignment, 'foo', trans_fname,
                   subject='sample', subjects_dir=subjects_dir)
-    pytest.raises(TypeError, plot_alignment, info, trans_fname,
+    pytest.raises(OSError, plot_alignment, info, trans_fname,
                   subject='sample', subjects_dir=subjects_dir, src='foo')
     pytest.raises(ValueError, plot_alignment, info, trans_fname,
                   subject='fsaverage', subjects_dir=subjects_dir,
                   src=sample_src)
     sample_src.plot(subjects_dir=subjects_dir, head=True, skull=True,
                     brain='white')
-    mlab.close(all=True)
+    renderer._close_all()
     # no-head version
-    mlab.close(all=True)
+    renderer._close_all()
     # all coord frames
     pytest.raises(ValueError, plot_alignment, info)
     plot_alignment(info, surfaces=[])
     for coord_frame in ('meg', 'head', 'mri'):
-        plot_alignment(info, meg=['helmet', 'sensors'], dig=True,
-                       coord_frame=coord_frame, trans=trans_fname,
-                       subject='sample', mri_fiducials=fiducials_path,
-                       subjects_dir=subjects_dir, src=sample_src)
-        mlab.close(all=True)
+        fig = plot_alignment(info, meg=['helmet', 'sensors'], dig=True,
+                             coord_frame=coord_frame, trans=trans_fname,
+                             subject='sample', mri_fiducials=fiducials_path,
+                             subjects_dir=subjects_dir, src=src_fname)
+    renderer._close_all()
     # EEG only with strange options
     evoked_eeg_ecog_seeg = evoked.copy().pick_types(meg=False, eeg=True)
     evoked_eeg_ecog_seeg.info['projs'] = []  # "remove" avg proj
@@ -217,7 +224,7 @@ def test_plot_alignment(tmpdir):
                        surfaces=['white', 'outer_skin', 'outer_skull'],
                        meg=['helmet', 'sensors'],
                        eeg=['original', 'projected'], ecog=True, seeg=True)
-    mlab.close(all=True)
+    renderer._close_all()
 
     sphere = make_sphere_model(info=evoked.info, r0='auto', head_radius='auto')
     bem_sol = read_bem_solution(op.join(subjects_dir, 'sample', 'bem',
@@ -242,15 +249,33 @@ def test_plot_alignment(tmpdir):
     plot_alignment(info, trans_fname, subject='sample',
                    meg=True, subjects_dir=subjects_dir,
                    surfaces=['head', 'inner_skull'], bem=bem_surfs)
+    # single-layer BEM can still plot head surface
+    assert bem_surfs[-1]['id'] == FIFF.FIFFV_BEM_SURF_ID_BRAIN
+    bem_sol_homog = read_bem_solution(op.join(subjects_dir, 'sample', 'bem',
+                                              'sample-1280-bem-sol.fif'))
+    for use_bem in (bem_surfs[-1:], bem_sol_homog):
+        with catch_logging() as log:
+            plot_alignment(info, trans_fname, subject='sample',
+                           meg=True, subjects_dir=subjects_dir,
+                           surfaces=['head', 'inner_skull'], bem=use_bem,
+                           verbose=True)
+        log = log.getvalue()
+        assert 'not find the surface for head in the provided BEM model' in log
+    # sphere model
     sphere = make_sphere_model('auto', 'auto', evoked.info)
     src = setup_volume_source_space(sphere=sphere)
     plot_alignment(info, eeg='projected', meg='helmet', bem=sphere,
                    src=src, dig=True, surfaces=['brain', 'inner_skull',
                                                 'outer_skull', 'outer_skin'])
     sphere = make_sphere_model('auto', None, evoked.info)  # one layer
-    plot_alignment(info, trans_fname, subject='sample', meg=False,
-                   coord_frame='mri', subjects_dir=subjects_dir,
-                   surfaces=['brain'], bem=sphere, show_axes=True)
+    # no info is permitted
+    fig = plot_alignment(trans=trans_fname, subject='sample', meg=False,
+                         coord_frame='mri', subjects_dir=subjects_dir,
+                         surfaces=['brain'], bem=sphere, show_axes=True)
+    renderer._close_all()
+    if renderer.get_3d_backend() == 'mayavi':
+        import mayavi  # noqa: F401 analysis:ignore
+        assert isinstance(fig, mayavi.core.scene.Scene)
 
     # 3D coil with no defined draw (ConvexHull)
     info_cube = pick_info(info, [0])
@@ -265,26 +290,43 @@ def test_plot_alignment(tmpdir):
         plot_alignment(info_cube, meg='sensors', surfaces=(), dig=True)
 
     # one layer bem with skull surfaces:
-    pytest.raises(ValueError, plot_alignment, info=info, trans=trans_fname,
-                  subject='sample', subjects_dir=subjects_dir,
-                  surfaces=['brain', 'head', 'inner_skull'], bem=sphere)
+    with pytest.raises(ValueError, match='sphere conductor model must have'):
+        plot_alignment(info=info, trans=trans_fname,
+                       subject='sample', subjects_dir=subjects_dir,
+                       surfaces=['brain', 'head', 'inner_skull'], bem=sphere)
     # wrong eeg value:
-    pytest.raises(ValueError, plot_alignment, info=info, trans=trans_fname,
-                  subject='sample', subjects_dir=subjects_dir, eeg='foo')
+    with pytest.raises(ValueError, match='eeg must only contain'):
+        plot_alignment(info=info, trans=trans_fname,
+                       subject='sample', subjects_dir=subjects_dir, eeg='foo')
     # wrong meg value:
-    pytest.raises(ValueError, plot_alignment, info=info, trans=trans_fname,
-                  subject='sample', subjects_dir=subjects_dir, meg='bar')
+    with pytest.raises(ValueError, match='meg must only contain'):
+        plot_alignment(info=info, trans=trans_fname,
+                       subject='sample', subjects_dir=subjects_dir, meg='bar')
     # multiple brain surfaces:
-    pytest.raises(ValueError, plot_alignment, info=info, trans=trans_fname,
-                  subject='sample', subjects_dir=subjects_dir,
-                  surfaces=['white', 'pial'])
-    pytest.raises(TypeError, plot_alignment, info=info, trans=trans_fname,
-                  subject='sample', subjects_dir=subjects_dir,
-                  surfaces=[1])
-    pytest.raises(ValueError, plot_alignment, info=info, trans=trans_fname,
-                  subject='sample', subjects_dir=subjects_dir,
-                  surfaces=['foo'])
-    mlab.close(all=True)
+    with pytest.raises(ValueError, match='Only one brain surface can be plot'):
+        plot_alignment(info=info, trans=trans_fname,
+                       subject='sample', subjects_dir=subjects_dir,
+                       surfaces=['white', 'pial'])
+    with pytest.raises(TypeError, match='all entries in surfaces must be'):
+        plot_alignment(info=info, trans=trans_fname,
+                       subject='sample', subjects_dir=subjects_dir,
+                       surfaces=[1])
+    with pytest.raises(ValueError, match='Unknown surface type'):
+        plot_alignment(info=info, trans=trans_fname,
+                       subject='sample', subjects_dir=subjects_dir,
+                       surfaces=['foo'])
+    fwd_fname = op.join(data_dir, 'MEG', 'sample',
+                        'sample_audvis_trunc-meg-eeg-oct-4-fwd.fif')
+    fwd = read_forward_solution(fwd_fname)
+    plot_alignment(subject='sample', subjects_dir=subjects_dir,
+                   trans=trans_fname, fwd=fwd,
+                   surfaces='white', coord_frame='head')
+    fwd = convert_forward_solution(fwd, force_fixed=True)
+    plot_alignment(subject='sample', subjects_dir=subjects_dir,
+                   trans=trans_fname, fwd=fwd,
+                   surfaces='white', coord_frame='head')
+
+    renderer._close_all()
 
 
 @testing.requires_testing_data
@@ -318,7 +360,7 @@ def test_limits_to_control_points():
         stc.plot(clim=dict(kind='value', pos_lims=[0, 1, 0]), **kwargs)
     with pytest.raises(ValueError, match=r'.*must be \(3,\)'):
         stc.plot(colormap='mne', clim=dict(pos_lims=(5, 10, 15, 20)), **kwargs)
-    with pytest.raises(ValueError, match='must be "value" or "percent"'):
+    with pytest.raises(ValueError, match="'value', 'values' and 'percent'"):
         stc.plot(clim=dict(pos_lims=(5, 10, 15), kind='foo'), **kwargs)
     with pytest.raises(ValueError, match='must be "auto" or dict'):
         stc.plot(colormap='mne', clim='foo', **kwargs)
@@ -393,9 +435,21 @@ def test_plot_dipole_mri_orthoview():
 
 
 @testing.requires_testing_data
-@requires_mayavi
+def test_plot_dipole_orientations(renderer):
+    """Test dipole plotting in 3d."""
+    dipoles = read_dipole(dip_fname)
+    trans = read_trans(trans_fname)
+    for coord_frame, mode in zip(['head', 'mri'],
+                                 ['arrow', 'sphere']):
+        dipoles.plot_locations(trans=trans, subject='sample',
+                               subjects_dir=subjects_dir,
+                               mode=mode, coord_frame=coord_frame)
+    renderer._close_all()
+
+
+@testing.requires_testing_data
 @traits_test
-def test_snapshot_brain_montage():
+def test_snapshot_brain_montage(renderer):
     """Test snapshot brain montage."""
     info = read_info(evoked_fname)
     fig = plot_alignment(
@@ -413,9 +467,10 @@ def test_snapshot_brain_montage():
     pytest.raises(ValueError, snapshot_brain_montage, fig, xyz_dict)
 
     # Make sure we raise error if the figure has no scene
-    pytest.raises(TypeError, snapshot_brain_montage, fig, info)
+    pytest.raises(ValueError, snapshot_brain_montage, None, info)
 
 
+@pytest.mark.slowtest  # can be slow on OSX
 @testing.requires_testing_data
 @requires_nibabel()
 @requires_version('nilearn', '0.4')
@@ -430,11 +485,14 @@ def test_plot_volume_source_estimates():
     data = np.random.RandomState(0).rand(n_verts, n_time)
     vol_stc = VolSourceEstimate(data, vertices, 1, 1)
 
-    for mode in ['glass_brain', 'stat_map']:
+    vol_vec_stc = VolVectorSourceEstimate(
+        np.tile(vol_stc.data[:, np.newaxis], (1, 3, 1)), vol_stc.vertices,
+        0, 1)
+    for mode, stc in zip(['glass_brain', 'stat_map'], (vol_stc, vol_vec_stc)):
         with pytest.warns(None):  # sometimes get scalars/index warning
-            fig = vol_stc.plot(sample_src, subject='sample',
-                               subjects_dir=subjects_dir,
-                               mode=mode)
+            fig = stc.plot(sample_src, subject='sample',
+                           subjects_dir=subjects_dir,
+                           mode=mode)
         # [ax_time, ax_y, ax_x, ax_z]
         for ax_idx in [0, 2, 3, 4]:
             _fake_click(fig, fig.axes[ax_idx], (0.3, 0.5))
@@ -473,5 +531,30 @@ def test_plot_vec_source_estimates():
         stc.plot('sample', subjects_dir=subjects_dir,
                  clim=dict(pos_lims=[1, 2, 3]))
 
+
+@testing.requires_testing_data
+@requires_mayavi
+def test_plot_sensors_connectivity():
+    """Test plotting of sensors connectivity."""
+    from mne import io, pick_types
+
+    data_path = data_dir
+    raw_fname = op.join(data_path, 'MEG', 'sample',
+                        'sample_audvis_trunc_raw.fif')
+
+    raw = io.read_raw_fif(raw_fname)
+    picks = pick_types(raw.info, meg='grad', eeg=False, stim=False,
+                       eog=True, exclude='bads')
+    n_channels = len(picks)
+    con = np.random.RandomState(42).randn(n_channels, n_channels)
+    info = raw.info
+    with pytest.raises(TypeError):
+        plot_sensors_connectivity(info='foo', con=con,
+                                  picks=picks)
+    with pytest.raises(ValueError):
+        plot_sensors_connectivity(info=info, con=con[::2, ::2],
+                                  picks=picks)
+
+    plot_sensors_connectivity(info=info, con=con, picks=picks)
 
 run_tests_if_main()

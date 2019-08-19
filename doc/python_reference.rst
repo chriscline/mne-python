@@ -58,7 +58,10 @@ Reading raw data
    read_raw_bti
    read_raw_cnt
    read_raw_ctf
+   read_raw_curry
    read_raw_edf
+   read_raw_bdf
+   read_raw_gdf
    read_raw_kit
    read_raw_nicolet
    read_raw_eeglab
@@ -97,6 +100,8 @@ File I/O
    :toctree: generated
 
    decimate_surface
+   channel_type
+   channel_indices_by_type
    get_head_surf
    get_meg_helmet_surf
    get_volume_labels_from_aseg
@@ -139,6 +144,8 @@ File I/O
    write_trans
    io.read_info
    io.show_fiff
+   digitization.DigPoint
+   digitization.Digitization
 
 Base class:
 
@@ -180,15 +187,16 @@ Datasets
    brainstorm.bst_raw.data_path
    eegbci.load_data
    fetch_aparc_sub_parcellation
+   fetch_fsaverage
    fetch_hcp_mmp_parcellation
    hf_sef.data_path
    kiloword.data_path
-   megsim.data_path
-   megsim.load_data
    misc.data_path
    mtrf.data_path
    multimodal.data_path
    opm.data_path
+   sleep_physionet.age.fetch_data
+   sleep_physionet.temazepam.fetch_data
    sample.data_path
    somato.data_path
    spm_face.data_path
@@ -247,6 +255,7 @@ Visualization
    plot_raw
    plot_raw_psd
    plot_sensors
+   plot_sensors_connectivity
    plot_snr_estimate
    plot_source_estimates
    plot_volume_source_estimates
@@ -258,6 +267,12 @@ Visualization
    plot_alignment
    snapshot_brain_montage
    plot_arrowmap
+   set_3d_backend
+   get_3d_backend
+   use_3d_backend
+   set_3d_view
+   set_3d_title
+   create_3d_figure
 
 
 Preprocessing
@@ -329,8 +344,10 @@ Projections:
    ica_find_ecg_events
    ica_find_eog_events
    infomax
+   mark_flat
    maxwell_filter
    oversampled_temporal_projection
+   peak_finder
    read_ica
    run_ica
    corrmap
@@ -430,6 +447,7 @@ Events
    :toctree: generated/
 
    define_target_events
+   shift_time_events
 
 :py:mod:`mne.epochs`:
 
@@ -484,8 +502,10 @@ Covariance computation
    Covariance
    compute_covariance
    compute_raw_covariance
-   cov.regularize
    cov.compute_whitener
+   cov.prepare_noise_cov
+   cov.regularize
+   compute_rank
    make_ad_hoc_cov
    read_cov
    write_cov
@@ -530,6 +550,9 @@ Forward Modeling
    apply_forward_raw
    average_forward_solutions
    convert_forward_solution
+   dig_mri_distances
+   forward.compute_depth_prior
+   forward.compute_orient_prior
    forward.restrict_forward_to_label
    forward.restrict_forward_to_stc
    make_bem_model
@@ -635,6 +658,7 @@ Inverse Solutions
    apply_lcmv
    apply_lcmv_epochs
    apply_lcmv_raw
+   apply_lcmv_cov
    make_dics
    apply_dics
    apply_dics_csd
@@ -680,6 +704,7 @@ Source Space Data
    SourceEstimate
    VectorSourceEstimate
    VolSourceEstimate
+   VolVectorSourceEstimate
    SourceMorph
    compute_source_morph
    head_to_mni
@@ -687,8 +712,11 @@ Source Space Data
    extract_label_time_course
    grade_to_tris
    grade_to_vertices
+   label.select_sources
    grow_labels
    label_sign_flip
+   labels_to_stc
+   morph_labels
    random_parcellation
    read_labels_from_annot
    read_dipole
@@ -789,9 +817,11 @@ Connectivity Estimation
 .. autosummary::
    :toctree: generated/
 
+   degree
+   envelope_correlation
+   phase_slope_index
    seed_target_indices
    spectral_connectivity
-   phase_slope_index
 
 
 .. _api_reference_statistics:
@@ -839,6 +869,7 @@ Non-parametric (clustering) resampling methods:
    spatio_temporal_cluster_test
    spatio_temporal_cluster_1samp_test
    summarize_clusters_stc
+   bootstrap_confidence_interval
 
 Compute ``connectivity`` matrices for cluster-level statistics:
 
@@ -872,12 +903,16 @@ Simulation
 .. autosummary::
    :toctree: generated/
 
+   add_chpi
+   add_ecg
+   add_eog
+   add_noise
    simulate_evoked
    simulate_raw
    simulate_stc
    simulate_sparse_stc
    select_source_in_label
-
+   SourceSimulator
 
 .. _api_decoding:
 
@@ -922,22 +957,7 @@ Functions that assist with decoding and model fitting:
 Realtime
 ========
 
-:py:mod:`mne.realtime`:
-
-.. automodule:: mne.realtime
-   :no-members:
-   :no-inherited-members:
-
-.. autosummary::
-   :toctree: generated/
-
-   RtEpochs
-   RtClient
-   MockRtClient
-   FieldTripClient
-   StimServer
-   StimClient
-
+Realtime functionality has moved to the standalone module :mod:`mne_realtime`.
 
 MNE-Report
 ==========
@@ -969,6 +989,20 @@ Logging and Configuration
    set_config
    sys_info
    verbose
+
+:py:mod:`mne.utils`:
+
+.. currentmodule:: mne.utils
+
+.. automodule:: mne.utils
+   :no-members:
+   :no-inherited-members:
+
+.. autosummary::
+   :toctree: generated/
+
+   deprecated
+   warn
 
 :py:mod:`mne.cuda`:
 

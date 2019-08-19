@@ -6,10 +6,11 @@
 #          Jona Sassenhagen <jona.sassenhagen@gmail.com>
 #          Teon Brooks <teon.brooks@gmail.com>
 #          Christian Brodbeck <christianbrodbeck@nyu.edu>
+#          Stefan Appelhoff <stefan.appelhoff@mailbox.org>
 #
 # License: Simplified BSD
 
-from collections import Iterable
+from collections.abc import Iterable
 import os
 import os.path as op
 
@@ -20,13 +21,13 @@ from ..viz import plot_montage
 from .channels import _contains_ch_type
 from ..transforms import (apply_trans, get_ras_to_neuromag_trans, _sph_to_cart,
                           _topo_to_sph, _str_to_frame, _frame_to_str)
-from ..io.meas_info import (_make_dig_points, _read_dig_points, _read_dig_fif,
-                            write_dig)
+from ..digitization._utils import (_make_dig_points, _read_dig_points,
+                                   _read_dig_fif, write_dig)
 from ..io.pick import pick_types
 from ..io.open import fiff_open
 from ..io.constants import FIFF
 from ..utils import (_check_fname, warn, copy_function_doc_to_method_doc,
-                     _clean_names)
+                     _check_option)
 
 from .layout import _pol_to_cart, _cart_to_sph
 
@@ -132,11 +133,12 @@ def read_montage(kind, ch_names=None, path=None, unit='m', transform=False):
     path : str | None
         The path of the folder containing the montage file. Defaults to the
         mne/channels/data/montages folder in your mne-python installation.
-    unit : 'm' | 'cm' | 'mm'
-        Unit of the input file. If not 'm' (default), coordinates will be
-        rescaled to 'm'.
+    unit : 'm' | 'cm' | 'mm' | 'auto'
+        Unit of the input file. When 'auto' the montage is normalized to
+        a sphere with a radius capturing the average head size (8.5cm).
+        Defaults to 'auto'.
     transform : bool
-        If True, points will be transformed to Neuromag space. The fidicuals,
+        If True, points will be transformed to Neuromag space. The fiducials,
         'nasion', 'lpa', 'rpa' must be specified in the montage file. Useful
         for points captured using Polhemus FastSCAN. Default is False.
 
@@ -209,6 +211,8 @@ def read_montage(kind, ch_names=None, path=None, unit='m', transform=False):
 
     .. versionadded:: 0.9.0
     """
+    _check_option('unit', unit, ['mm', 'cm', 'm', 'auto'])
+
     if path is None:
         path = op.join(op.dirname(__file__), 'data', 'montages')
     if not op.isabs(kind):
@@ -263,7 +267,7 @@ def read_montage(kind, ch_names=None, path=None, unit='m', transform=False):
                     break
                 pos.append(list(map(float, line.split())))
             for line in fid:
-                if not line or not set(line) - set([' ']):
+                if not line or not set(line) - {' '}:
                     break
                 ch_names_.append(line.strip(' ').strip('\n'))
         pos = np.array(pos) * scale_factor
@@ -276,7 +280,9 @@ def read_montage(kind, ch_names=None, path=None, unit='m', transform=False):
         ch_names_ = data[:, 0].tolist()
         az = np.deg2rad(data[:, 2].astype(float))
         pol = np.deg2rad(data[:, 1].astype(float))
-        pos = _sph_to_cart(np.array([np.ones(len(az)) * 85., az, pol]).T)
+        rad = np.ones(len(az))  # spherical head model
+        rad *= 85.  # scale up to realistic head radius (8.5cm == 85mm)
+        pos = _sph_to_cart(np.array([rad, az, pol]).T)
     elif ext == '.csd':
         # CSD toolbox
         try:  # newer version
@@ -303,7 +309,9 @@ def read_montage(kind, ch_names=None, path=None, unit='m', transform=False):
         az = np.deg2rad(np.array([h if a >= 0. else 180 + h
                                   for h, a in zip(horiz, az)]))
         pol = radius * np.pi
-        pos = _sph_to_cart(np.array([np.ones(len(az)) * 85., az, pol]).T)
+        rad = np.ones(len(az))  # spherical head model
+        rad *= 85.  # scale up to realistic head radius (8.5cm == 85mm)
+        pos = _sph_to_cart(np.array([rad, az, pol]).T)
     elif ext == '.hpts':
         # MNE-C specified format for generic digitizer data
         fid_names = ['1', '2', '3']
@@ -313,32 +321,47 @@ def read_montage(kind, ch_names=None, path=None, unit='m', transform=False):
         ch_names_ = data['name'].astype(str).tolist()
         pos = np.vstack((data['x'], data['y'], data['z'])).T
     elif ext in ('.loc', '.locs', '.eloc'):
-        ch_names_ = np.loadtxt(fname, dtype='S4',
-                               usecols=[3]).astype(str).tolist()
+        ch_names_ = np.genfromtxt(fname, dtype=str, usecols=3).tolist()
         topo = np.loadtxt(fname, dtype=float, usecols=[1, 2])
         sph = _topo_to_sph(topo)
         pos = _sph_to_cart(sph)
         pos[:, [0, 1]] = pos[:, [1, 0]] * [-1, 1]
     elif ext == '.bvef':
         # 'BrainVision Electrodes File' format
+        # Based on BrainVision Analyzer coordinate system: Defined between
+        # standard electrode positions: X-axis from T7 to T8, Y-axis from Oz to
+        # Fpz, Z-axis orthogonal from XY-plane through Cz, fit to a sphere if
+        # idealized (when radius=1), specified in millimeters
+        if unit not in ['auto', 'mm']:
+            raise ValueError('`unit` must be "auto" or "mm" for .bvef files.')
         root = ElementTree.parse(fname).getroot()
         ch_names_ = [s.text for s in root.findall("./Electrode/Name")]
         theta = [float(s.text) for s in root.findall("./Electrode/Theta")]
         pol = np.deg2rad(np.array(theta))
         phi = [float(s.text) for s in root.findall("./Electrode/Phi")]
         az = np.deg2rad(np.array(phi))
-        pos = _sph_to_cart(np.array([np.ones(len(az)) * 85., az, pol]).T)
+        rad = [float(s.text) for s in root.findall("./Electrode/Radius")]
+        rad = np.array(rad)  # specified in mm
+        if set(rad) == set([1]):
+            # idealized montage (spherical head model), scale up to realistic
+            # head radius (8.5cm == 85mm)
+            rad = np.array(rad) * 85.
+        pos = _sph_to_cart(np.array([rad, az, pol]).T)
     else:
         raise ValueError('Currently the "%s" template is not supported.' %
                          kind)
     selection = np.arange(len(pos))
 
-    if unit == 'mm':
+    if unit == 'auto':  # rescale to realistic head radius in meters: 0.085
+        pos -= np.mean(pos, axis=0)
+        pos = 0.085 * (pos / np.linalg.norm(pos, axis=1).mean())
+    elif unit == 'mm':
         pos /= 1e3
     elif unit == 'cm':
         pos /= 1e2
-    elif unit != 'm':
-        raise ValueError("'unit' should be either 'm', 'cm', or 'mm'.")
+    elif unit == 'm':  # montage is supposed to be in m
+        pass
+
     names_lower = [name.lower() for name in list(ch_names_)]
     fids = {key: pos[names_lower.index(fid_names[ii])]
             if fid_names[ii] in names_lower else None
@@ -550,8 +573,8 @@ def _check_frame(d, frame_str):
 
 
 def read_dig_montage(hsp=None, hpi=None, elp=None, point_names=None,
-                     unit='auto', fif=None, egi=None, transform=True,
-                     dev_head_t=False):
+                     unit='auto', fif=None, egi=None, bvct=None,
+                     transform=True, dev_head_t=False, ):
     r"""Read subject-specific digitization montage from a file.
 
     Parameters
@@ -597,6 +620,12 @@ def read_dig_montage(hsp=None, hpi=None, elp=None, point_names=None,
 
         .. versionadded:: 0.14
 
+    bvct : None | str
+        BrainVision CapTrak coordinates file from which to read digitization
+        locations. This is typically in XML format. If str (filename), all
+        other arguments are ignored.
+
+        .. versionadded:: 0.19
     transform : bool
         If True (default), points will be transformed to Neuromag space
         using :meth:`DigMontage.transform_to_head`.
@@ -634,9 +663,9 @@ def read_dig_montage(hsp=None, hpi=None, elp=None, point_names=None,
         if dev_head_t or not transform:
             raise ValueError('transform must be True and dev_head_t must be '
                              'False for FIF dig montage')
-        if not all(x is None for x in (hsp, hpi, elp, point_names, egi)):
-            raise ValueError('hsp, hpi, elp, point_names, egi must all be '
-                             'None if fif is not None')
+        if not all(x is None for x in (hsp, hpi, elp, point_names, egi, bvct)):
+            raise ValueError('hsp, hpi, elp, point_names, egi, bvct must all '
+                             'be None if fif is not None.')
         _check_fname(fif, overwrite='read', must_exist=True)
         # Load the dig data
         f, tree = fiff_open(fif)[:2]
@@ -668,10 +697,11 @@ def read_dig_montage(hsp=None, hpi=None, elp=None, point_names=None,
         hsp = np.array(hsp) if len(hsp) else None
         elp = np.array(elp) if len(elp) else None
         coord_frame = 'head'
+
     elif egi is not None:
-        if not all(x is None for x in (hsp, hpi, elp, point_names, fif)):
-            raise ValueError('hsp, hpi, elp, point_names, fif must all be '
-                             'None if egi is not None')
+        if not all(x is None for x in (hsp, hpi, elp, point_names, fif, bvct)):
+            raise ValueError('hsp, hpi, elp, point_names, fif, bvct must all '
+                             'be None if egi is not None.')
         _check_fname(egi, overwrite='read', must_exist=True)
 
         root = ElementTree.parse(egi).getroot()
@@ -715,6 +745,57 @@ def read_dig_montage(hsp=None, hpi=None, elp=None, point_names=None,
         fids = [fids[key] for key in ('nasion', 'lpa', 'rpa')]
         coord_frame = 'unknown'
 
+    elif bvct is not None:
+        if not all(x is None for x in (hsp, hpi, elp, point_names, fif, egi)):
+            raise ValueError('hsp, hpi, elp, point_names, fif, egi must all '
+                             'be None if bvct is not None.')
+        _check_fname(bvct, overwrite='read', must_exist=True)
+
+        root = ElementTree.parse(bvct).getroot()
+        sensors = root.find('CapTrakElectrodeList')
+
+        fids = {}
+        dig_ch_pos = {}
+
+        fid_name_map = {'Nasion': 'nasion', 'RPA': 'rpa', 'LPA': 'lpa'}
+
+        # CapTrak is natively in mm
+        scale = dict(mm=1e-3, cm=1e-2, auto=1e-3, m=1)
+        if unit not in scale:
+            raise ValueError("Unit needs to be one of %s, not %r" %
+                             (sorted(scale.keys()), unit))
+        if unit not in ['mm', 'auto']:
+            warn('Using "{}" as unit for BVCT file. BVCT files are usually '
+                 'specified in "mm". This might lead to errors.'.format(unit),
+                 RuntimeWarning)
+
+        for s in sensors:
+            name = s.find('Name').text
+
+            # Need to prune "GND" and "REF": these are not included in the raw
+            # data and will raise errors when we try to do raw.set_montage(...)
+            # XXX eventually this should be stored in ch['loc'][3:6]
+            # but we don't currently have such capabilities here
+            if name in ['GND', 'REF']:
+                continue
+
+            fid = name in fid_name_map
+            coordinates = np.array([float(s.find('X').text),
+                                    float(s.find('Y').text),
+                                    float(s.find('Z').text)])
+
+            coordinates *= scale[unit]
+
+            # Fiducials
+            if fid:
+                fid_name = fid_name_map[name]
+                fids[fid_name] = coordinates
+            # EEG Channels
+            else:
+                dig_ch_pos[name] = coordinates
+
+        fids = [fids[key] for key in ('nasion', 'lpa', 'rpa')]
+        coord_frame = 'unknown'
     else:
         fids = [None] * 3
         dig_ch_pos = None
@@ -791,20 +872,18 @@ def _set_montage(info, montage, update_ch_names=False, set_dig=True):
 
     if isinstance(montage, Montage):
         if update_ch_names:
-            info['chs'] = list()
-            for ii, ch_name in enumerate(montage.ch_names):
+            for ii, (ch, ch_name) in \
+                    enumerate(zip(info['chs'], montage.ch_names)):
                 ch_info = {'cal': 1., 'logno': ii + 1, 'scanno': ii + 1,
                            'range': 1.0, 'unit_mul': 0, 'ch_name': ch_name,
                            'unit': FIFF.FIFF_UNIT_V, 'kind': FIFF.FIFFV_EEG_CH,
                            'coord_frame': FIFF.FIFFV_COORD_HEAD,
                            'coil_type': FIFF.FIFFV_COIL_EEG}
-                info['chs'].append(ch_info)
+                ch.update(ch_info)
             info._update_redundant()
 
         if not _contains_ch_type(info, 'eeg'):
             raise ValueError('No EEG channels found.')
-
-        sensors_found = []
 
         # If there are no name collisions, match channel names in a case
         # insensitive manner.
@@ -817,9 +896,9 @@ def _set_montage(info, montage, update_ch_names=False, set_dig=True):
         else:
             montage_ch_names = montage.ch_names
             info_ch_names = info['ch_names']
-        info_ch_names = _clean_names(info_ch_names, remove_whitespace=True)
-        montage_ch_names = _clean_names(montage_ch_names,
-                                        remove_whitespace=True)
+
+        info_ch_names = [name.replace(' ', '') for name in info_ch_names]
+        montage_ch_names = [name.replace(' ', '') for name in montage_ch_names]
 
         dig = dict()
         for pos, ch_name in zip(montage.pos, montage_ch_names):
@@ -828,20 +907,20 @@ def _set_montage(info, montage, update_ch_names=False, set_dig=True):
 
             ch_idx = info_ch_names.index(ch_name)
             info['chs'][ch_idx]['loc'] = np.r_[pos, [0.] * 9]
-            sensors_found.append(ch_idx)
-            dig[ch_name] = pos
+            info['chs'][ch_idx]['coord_frame'] = FIFF.FIFFV_COORD_HEAD
+            dig[ch_idx] = pos
         if set_dig:
             info['dig'] = _make_dig_points(
                 nasion=montage.nasion, lpa=montage.lpa, rpa=montage.rpa,
                 dig_ch_pos=dig)
-        if len(sensors_found) == 0:
+        if len(dig) == 0:
             raise ValueError('None of the sensors defined in the montage were '
                              'found in the info structure. Check the channel '
                              'names.')
 
         eeg_sensors = pick_types(info, meg=False, ref_meg=False, eeg=True,
                                  exclude=[])
-        not_found = np.setdiff1d(eeg_sensors, sensors_found)
+        not_found = np.setdiff1d(eeg_sensors, list(dig.keys()))
         if len(not_found) > 0:
             not_found_names = [info['ch_names'][ch] for ch in not_found]
             warn('The following EEG sensors did not have a position '
