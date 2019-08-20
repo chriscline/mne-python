@@ -105,7 +105,7 @@ def plt_show(show=True, fig=None, **kwargs):
     """
     from matplotlib import get_backend
     import matplotlib.pyplot as plt
-    if show and get_backend() != 'agg':
+    if show and 'agg' not in get_backend().lower():
         (fig or plt).show(**kwargs)
 
 
