@@ -61,7 +61,7 @@ from .ctps_ import ctps
 from ..io.pick import channel_type, pick_channels_regexp
 
 __all__ = ('ICA', 'ica_find_ecg_events', 'ica_find_eog_events',
-           'get_score_funcs', 'read_ica', 'run_ica', 'read_eeglab_ica')
+           'get_score_funcs', 'read_ica', 'run_ica', 'read_ica_eeglab')
 
 
 def _make_xy_sfunc(func, ndim_output=False):
