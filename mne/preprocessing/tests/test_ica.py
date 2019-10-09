@@ -1098,8 +1098,7 @@ def test_read_eeglab_ica():
     ica = read_eeglab_ica(file_name)
     raw_cleaned = ica.apply(raw.copy(), exclude=ind_comp_to_drop)
 
-    assert(np.all(np.isclose(raw_cleaned_matlab.get_data(),
-                             raw_cleaned.get_data())))
+    assert np.allclose(raw_cleaned_matlab.get_data(), raw_cleaned.get_data())
 
 
 run_tests_if_main()
