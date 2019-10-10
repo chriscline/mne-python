@@ -2657,7 +2657,6 @@ def read_ica_eeglab(file_name):
     info, _, _ = _get_info(eeg)
 
     n_components = eeg.icaweights.shape[0]
-    n_chans = len(info["ch_names"])
 
     ica = ICA(method='imported_eeglab', n_components=n_components)
 
@@ -2667,8 +2666,8 @@ def read_ica_eeglab(file_name):
     ica.max_pca_components = n_components
     ica.n_components_ = n_components
 
-    ica.pre_whitener_ = np.ones((n_chans, 1))
-    ica.pca_mean_ = np.zeros(n_chans)
+    ica.pre_whitener_ = np.ones((len(eeg.icachansind), 1))
+    ica.pca_mean_ = np.zeros(len(eeg.icachansind))
 
     ica.unmixing_matrix_ = eeg.icaweights
     ica.pca_components_ = eeg.icasphere
