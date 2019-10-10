@@ -2650,7 +2650,7 @@ def read_ica_eeglab(file_name):
 
     Returns
     -------
-    ica : mne.preprocessing.ICA object
+    ica : instance of ICA
         An ICA object based on the information contained in file file_name.
     """
     eeg = _check_load_mat(file_name, None)
