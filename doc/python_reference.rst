@@ -361,6 +361,7 @@ Projections:
    run_ica
    corrmap
    optical_density
+   read_ica_eeglab
 
 EEG referencing:
 
