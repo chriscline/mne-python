@@ -228,7 +228,7 @@ class ICA(ContainsMixin):
         in the :meth:`ICA.apply` method, i.e. artifactual ICA components.
         The components identified manually and by the various automatic
         artifact detection methods should be (manually) appended
-        (e.g. ``ica.exclude.extend(eog_inds)``).
+        (e.g. `ica.exclude.extend(eog_inds)`).
         (There is also an `exclude` parameter in the :meth:`ICA.apply` method.)
         To scrap all marked components, set this attribute to an empty list.
     info : None | instance of Info
