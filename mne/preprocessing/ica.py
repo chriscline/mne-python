@@ -2659,7 +2659,7 @@ def read_ica_eeglab(fname):
     Parameters
     ----------
     fname : str
-        Complete path to a .set EEGLAB file that contains an ICA.
+        Complete path to a .set EEGLAB file that contains an ICA object.
 
     Returns
     -------
