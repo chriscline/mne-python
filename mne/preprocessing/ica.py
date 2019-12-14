@@ -36,6 +36,8 @@ from ..io.tag import read_tag
 from ..io.meas_info import write_meas_info, read_meas_info
 from ..io.constants import FIFF
 from ..io.base import BaseRaw
+from ..io.eeglab.eeglab import _get_info, _check_load_mat
+
 from ..epochs import BaseEpochs
 from ..viz import (plot_ica_components, plot_ica_scores,
                    plot_ica_sources, plot_ica_overlay)
@@ -58,9 +60,8 @@ from .bads import find_outliers
 from .ctps_ import ctps
 from ..io.pick import channel_type, pick_channels_regexp
 
-
 __all__ = ('ICA', 'ica_find_ecg_events', 'ica_find_eog_events',
-           'get_score_funcs', 'read_ica', 'run_ica')
+           'get_score_funcs', 'read_ica', 'run_ica', 'read_ica_eeglab')
 
 
 def _make_xy_sfunc(func, ndim_output=False):
@@ -202,24 +203,37 @@ class ICA(ContainsMixin):
         If fit, the mean vector used to center the data before doing the PCA.
     pca_explained_variance_ : ndarray, shape (`max_pca_components`,)
         If fit, the variance explained by each PCA component.
-    mixing_matrix_ : ndarray, shape (`n_components_`, `n_components_`)
+    mixing_matrix_ : ndarray
         If fit, the whitened mixing matrix to go back from ICA space to PCA
-        space.
-        It is, in combination with the `pca_components_`, used by
-        :meth:`ICA.apply` and :meth:`ICA.get_components` to re-mix/project
-        a subset of the ICA components into the observed channel space.
-        The former method also removes the pre-whitening (z-scaling) and the
-        de-meaning.
-    unmixing_matrix_ : ndarray, shape (`n_components_`, `n_components_`)
+        space and has a square shape with dimension (`n_components_`,
+        `n_components_`).
+        If imported from EEGLAB and if PCA reduction has been used in
+        EEGLAB, the mixing/unmixing matrices are including this data
+        reduction step, such that they take rectangular shapes.
+        The `mixing_matrix` is, in combination with the `pca_components_`,
+        used by :meth:`ICA.apply` and :meth:`ICA.get_components` to
+        re-mix/project a subset of the ICA components into the observed
+        channel space. The former method also removes the pre-whitening
+        (z-scaling) and the de-meaning.
+    unmixing_matrix_ : ndarray
         If fit, the whitened matrix to go from PCA space to ICA space.
         Used, in combination with the `pca_components_`, by the methods
         :meth:`ICA.get_sources` and :meth:`ICA.apply` to unmix the observed data.
+        In this case, this matrix has a square shape with dimension
+        (`n_components_`, `n_components_`).
+        If imported from EEGLAB and if PCA reduction has been used in
+        EEGLAB, runica returns
+            weights= weights*sphere*eigenvectors(:,1:ncomps)';
+            sphere = eye(urchans);
+        such that the unmixing matrix and the PCA components cannot be
+        separated when imported in MNE. For that reason, the unmixing matrix
+        is a composite that can takes a rectangular shape.
     exclude : array-like of int
         List or np.array of sources indices to exclude when re-mixing the data
         in the :meth:`ICA.apply` method, i.e. artifactual ICA components.
         The components identified manually and by the various automatic
         artifact detection methods should be (manually) appended
-        (e.g. ``ica.exclude.extend(eog_inds)``).
+        (e.g. `ica.exclude.extend(eog_inds)`).
         (There is also an `exclude` parameter in the :meth:`ICA.apply` method.)
         To scrap all marked components, set this attribute to an empty list.
     info : None | instance of Info
@@ -326,7 +340,8 @@ class ICA(ContainsMixin):
                  n_pca_components=None, noise_cov=None, random_state=None,
                  method='fastica', fit_params=None, max_iter=200,
                  allow_ref_meg=False, verbose=None):  # noqa: D102
-        _check_option('method', method, ['fastica', 'infomax', 'picard'])
+        _check_option('method', method, ['fastica', 'infomax',
+                                         'picard', 'imported_eeglab'])
         if method == 'fastica' and not check_version('sklearn', '0.15'):
             raise RuntimeError('The scikit-learn package (version >= 0.15) '
                                'is required for FastICA.')
@@ -1487,21 +1502,33 @@ class ICA(ContainsMixin):
         logger.info('Zeroing out %i ICA components'
                     % (n_components - len(sel_keep)))
 
-        unmixing = np.eye(_n_pca_comp)
-        unmixing[:n_components, :n_components] = self.unmixing_matrix_
-        unmixing = np.dot(unmixing, self.pca_components_[:_n_pca_comp])
+        if (self.method == 'imported_eeglab' and
+           np.diff(self.unmixing_matrix_.shape)[0]):
+            # When PCA reduction is used in EEGLAB, runica returns
+            # weights= weights*sphere*eigenvectors(:,1:ncomps)';
+            # sphere = eye(urchans);
+            # such that we cannot separate the unmixing matrix and
+            # the PCA components. For that reason, the composite
+            # unmixing matrix takes a rectangular shape.
+            unmixing = self.unmixing_matrix_
+            mixing = self.mixing_matrix_
 
-        mixing = np.eye(_n_pca_comp)
-        mixing[:n_components, :n_components] = self.mixing_matrix_
-        mixing = np.dot(self.pca_components_[:_n_pca_comp].T, mixing)
+        else:
+            unmixing = np.eye(_n_pca_comp)
+            unmixing[:n_components, :n_components] = self.unmixing_matrix_
+            unmixing = unmixing @ self.pca_components_[:_n_pca_comp]
+
+            mixing = np.eye(_n_pca_comp)
+            mixing[:n_components, :n_components] = self.mixing_matrix_
+            mixing = self.pca_components_[:_n_pca_comp].T @ mixing
 
         if _n_pca_comp > n_components:
             sel_keep = np.concatenate(
                 (sel_keep, range(n_components, _n_pca_comp)))
 
-        proj_mat = np.dot(mixing[:, sel_keep], unmixing[sel_keep, :])
+        proj_mat = mixing[:, sel_keep] @ unmixing[sel_keep, :]
 
-        data = np.dot(proj_mat, data)
+        data = proj_mat @ data
 
         if self.pca_mean_ is not None:
             data += self.pca_mean_[:, None]
@@ -2622,3 +2649,39 @@ def corrmap(icas, template, threshold="auto", label=None, ch_type="eeg",
         return template_fig, labelled_ics
     else:
         return None
+
+
+def read_ica_eeglab(fname):
+    """Load ICA information saved in an EEGLAB .set file.
+
+    Parameters
+    ----------
+    fname : str
+        Complete path to a .set EEGLAB file that contains an ICA object.
+
+    Returns
+    -------
+    ica : instance of ICA
+        An ICA object based on the information contained in the input file.
+    """
+    eeg = _check_load_mat(fname, None)
+    info = _get_info(eeg)[0]
+
+    n_components = eeg.icaweights.shape[0]
+
+    ica = ICA(method='imported_eeglab', n_components=n_components)
+
+    ica.current_fit = "eeglab"
+    ica.ch_names = info["ch_names"]
+    ica.n_pca_components = None
+    ica.max_pca_components = n_components
+    ica.n_components_ = n_components
+
+    ica.pre_whitener_ = np.ones((len(eeg.icachansind), 1))
+    ica.pca_mean_ = np.zeros(len(eeg.icachansind))
+
+    ica.unmixing_matrix_ = eeg.icaweights
+    ica.pca_components_ = eeg.icasphere
+    ica.mixing_matrix_ = np.linalg.pinv(ica.pca_components_) @ eeg.icawinv
+
+    return ica

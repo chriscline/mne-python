@@ -379,6 +379,7 @@ Projections:
    beer_lambert_law
    source_detector_distances
    short_channels
+   read_ica_eeglab
 
 EEG referencing:
 
