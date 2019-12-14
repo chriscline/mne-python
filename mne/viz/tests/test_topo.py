@@ -1,4 +1,4 @@
-# Authors: Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
+# Authors: Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #          Denis Engemann <denis.engemann@gmail.com>
 #          Martin Luessi <mluessi@nmr.mgh.harvard.edu>
 #          Eric Larson <larson.eric.d@gmail.com>
@@ -86,7 +86,7 @@ def test_plot_joint():
                                                               time_unit='s'))
 
     axes = plt.subplots(nrows=3)[-1].flatten().tolist()
-    evoked.plot_joint(times=[0], picks=[6, 7, 8],  ts_args=dict(axes=axes[0]),
+    evoked.plot_joint(times=[0], picks=[6, 7, 8], ts_args=dict(axes=axes[0]),
                       topomap_args={"axes": axes[1:], "time_unit": "s"})
     with pytest.raises(ValueError, match='array of length 6'):
         evoked.plot_joint(picks=[6, 7, 8], ts_args=dict(axes=axes[0]),
@@ -225,7 +225,7 @@ def test_plot_tfr_topo():
     # test opening tfr by clicking
     num_figures_before = len(plt.get_fignums())
     # could use np.reshape(fig.axes[-1].images[0].get_extent(), (2, 2)).mean(1)
-    with pytest.warns(None):  # on old mpl there is a warning
+    with pytest.warns(None):  # on old mpl (at least 2.0) there is a warning
         _fake_click(fig, fig.axes[0], (0.08, 0.65))
     assert num_figures_before + 1 == len(plt.get_fignums())
     plt.close('all')

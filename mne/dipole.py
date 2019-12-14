@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Single-dipole functions and classes."""
 
-# Authors: Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
+# Authors: Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #          Eric Larson <larson.eric.d@gmail.com>
 #
 # License: Simplified BSD
@@ -26,13 +26,13 @@ from .forward._make_forward import (_get_trans, _setup_bem,
 from .forward._compute_forward import (_compute_forwards_meeg,
                                        _prep_field_computation)
 
-from .surface import transform_surface_to, _compute_nearest
+from .surface import (transform_surface_to, _compute_nearest,
+                      _points_outside_surface)
 from .bem import _bem_find_surface, _surf_name
-from .source_space import (_make_volume_source_space, SourceSpaces,
-                           _points_outside_surface)
+from .source_space import _make_volume_source_space, SourceSpaces
 from .parallel import parallel_func
 from .utils import (logger, verbose, _time_mask, warn, _check_fname,
-                    check_fname, _pl, fill_doc, _check_option,
+                    check_fname, _pl, fill_doc, _check_option, ShiftTimeMixin,
                     _svd_lwork, _repeated_svd, ddot, dgemv, dgemm)
 
 
@@ -164,7 +164,8 @@ class Dipole(object):
                 fid.write(('## Name "%s dipoles" Style "Dipoles"'
                            % self.name).encode('utf-8'))
 
-    def crop(self, tmin=None, tmax=None):
+    @fill_doc
+    def crop(self, tmin=None, tmax=None, include_tmax=True):
         """Crop data to a given time interval.
 
         Parameters
@@ -173,6 +174,7 @@ class Dipole(object):
             Start time of selection in seconds.
         tmax : float | None
             End time of selection in seconds.
+        %(include_tmax)s
 
         Returns
         -------
@@ -182,7 +184,8 @@ class Dipole(object):
         sfreq = None
         if len(self.times) > 1:
             sfreq = 1. / np.median(np.diff(self.times))
-        mask = _time_mask(self.times, tmin, tmax, sfreq=sfreq)
+        mask = _time_mask(self.times, tmin, tmax, sfreq=sfreq,
+                          include_tmax=include_tmax)
         for attr in ('times', 'pos', 'gof', 'amplitude', 'ori',
                      'khi2', 'nfree'):
             if getattr(self, attr) is not None:
@@ -216,10 +219,7 @@ class Dipole(object):
         subject : str
             The subject name corresponding to FreeSurfer environment
             variable SUBJECT.
-        subjects_dir : None | str
-            The path to the freesurfer subjects reconstructions.
-            It corresponds to Freesurfer environment variable SUBJECTS_DIR.
-            The default is None.
+        %(subjects_dir)s
         mode : str
             Can be ``'arrow'``, ``'sphere'`` or ``'orthoview'``.
 
@@ -258,7 +258,7 @@ class Dipole(object):
             Show figure if True. Defaults to True.
             Only used if mode equals 'orthoview'.
 
-        scale: float
+        scale : float
             The scale of the dipoles if ``mode`` is 'arrow' or 'sphere'.
         color : tuple
             The color of the dipoles if ``mode`` is 'arrow' or 'sphere'.
@@ -291,7 +291,7 @@ class Dipole(object):
 
         Parameters
         ----------
-        color: matplotlib Color
+        color : matplotlib color
             Color to use for the trace.
         show : bool
             Show figure if True.
@@ -358,14 +358,12 @@ class Dipole(object):
 def _read_dipole_fixed(fname):
     """Read a fixed dipole FIF file."""
     logger.info('Reading %s ...' % fname)
-    info, nave, aspect_kind, first, last, comment, times, data = \
-        _read_evoked(fname)
-    return DipoleFixed(info, data, times, nave, aspect_kind, first, last,
-                       comment)
+    info, nave, aspect_kind, comment, times, data = _read_evoked(fname)
+    return DipoleFixed(info, data, times, nave, aspect_kind, comment=comment)
 
 
 @fill_doc
-class DipoleFixed(object):
+class DipoleFixed(ShiftTimeMixin):
     """Dipole class for fixed-position dipole fits.
 
     .. note:: This class should usually not be instantiated directly,
@@ -384,9 +382,9 @@ class DipoleFixed(object):
     aspect_kind : int
         The kind of data.
     first : int
-        First sample.
+        First sample. Deprecated, will be removed in 0.21.
     last : int
-        Last sample.
+        Last sample. Deprecated, will be removed in 0.21.
     comment : str
         The dipole comment.
     %(verbose)s
@@ -407,18 +405,22 @@ class DipoleFixed(object):
     """
 
     @verbose
-    def __init__(self, info, data, times, nave, aspect_kind, first, last,
-                 comment, verbose=None):  # noqa: D102
+    def __init__(self, info, data, times, nave, aspect_kind,
+                 first=None, last=None, comment='',
+                 verbose=None):  # noqa: D102
         self.info = info
         self.nave = nave
         self._aspect_kind = aspect_kind
         self.kind = _aspect_rev.get(aspect_kind, 'unknown')
-        self.first = first
-        self.last = last
         self.comment = comment
         self.times = times
+        if first is not None or last is not None:
+            warn(DeprecationWarning, 'first and last are deprecated, '
+                 'do not pass them')
         self.data = data
         self.verbose = verbose
+        self.preload = True
+        self._update_first_last()
 
     def __repr__(self):  # noqa: D105
         s = "n_times : %s" % len(self.times)
@@ -1027,7 +1029,6 @@ def fit_dipole(evoked, cov, bem, trans=None, min_dist=5., n_jobs=1,
         the position is fixed during fitting.
 
         .. versionadded:: 0.12
-
     ori : ndarray, shape (3,) | None
         Orientation of the dipole to use. If None (default), the
         orientation is free to change as a function of time. If an
@@ -1037,7 +1038,6 @@ def fit_dipole(evoked, cov, bem, trans=None, min_dist=5., n_jobs=1,
         for each time instant.
 
         .. versionadded:: 0.12
-
     %(verbose)s
 
     Returns
@@ -1296,8 +1296,7 @@ def fit_dipole(evoked, cov, bem, trans=None, min_dist=5., n_jobs=1,
         out_info._update_redundant()
         out_info._check_consistency()
         dipoles = DipoleFixed(out_info, data, times, evoked.nave,
-                              evoked._aspect_kind, evoked.first, evoked.last,
-                              comment)
+                              evoked._aspect_kind, comment=comment)
     else:
         dipoles = Dipole(times, out[0], out[1], out[2], out[3], comment,
                          out[4], out[5], out[6])

@@ -1,4 +1,4 @@
-# Author: Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
+# Author: Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #         Denis Engemann <denis.engemann@gmail.com>
 #
 # License: BSD (3-clause)
@@ -21,7 +21,8 @@ from mne import (read_cov, write_cov, Epochs, merge_events,
                  find_events, compute_raw_covariance,
                  compute_covariance, read_evokeds, compute_proj_raw,
                  pick_channels_cov, pick_types, make_ad_hoc_cov,
-                 make_fixed_length_events)
+                 make_fixed_length_events, create_info)
+from mne.channels import equalize_channels
 from mne.datasets import testing
 from mne.fixes import _get_args
 from mne.io import read_raw_fif, RawArray, read_raw_ctf
@@ -173,7 +174,7 @@ def _assert_reorder(cov_new, cov_orig, order):
 
 def test_ad_hoc_cov(tmpdir):
     """Test ad hoc cov creation and I/O."""
-    out_fname = op.join(str(tmpdir), 'test-cov.fif')
+    out_fname = tmpdir.join('test-cov.fif')
     evoked = read_evokeds(ave_fname)[0]
     cov = make_ad_hoc_cov(evoked.info)
     cov.save(out_fname)
@@ -190,12 +191,11 @@ def test_ad_hoc_cov(tmpdir):
 
 def test_io_cov(tmpdir):
     """Test IO for noise covariance matrices."""
-    tempdir = str(tmpdir)
     cov = read_cov(cov_fname)
     cov['method'] = 'empirical'
     cov['loglik'] = -np.inf
-    cov.save(op.join(tempdir, 'test-cov.fif'))
-    cov2 = read_cov(op.join(tempdir, 'test-cov.fif'))
+    cov.save(tmpdir.join('test-cov.fif'))
+    cov2 = read_cov(tmpdir.join('test-cov.fif'))
     assert_array_almost_equal(cov.data, cov2.data)
     assert_equal(cov['method'], cov2['method'])
     assert_equal(cov['loglik'], cov2['loglik'])
@@ -203,24 +203,24 @@ def test_io_cov(tmpdir):
 
     cov2 = read_cov(cov_gz_fname)
     assert_array_almost_equal(cov.data, cov2.data)
-    cov2.save(op.join(tempdir, 'test-cov.fif.gz'))
-    cov2 = read_cov(op.join(tempdir, 'test-cov.fif.gz'))
+    cov2.save(tmpdir.join('test-cov.fif.gz'))
+    cov2 = read_cov(tmpdir.join('test-cov.fif.gz'))
     assert_array_almost_equal(cov.data, cov2.data)
 
     cov['bads'] = ['EEG 039']
     cov_sel = pick_channels_cov(cov, exclude=cov['bads'])
     assert cov_sel['dim'] == (len(cov['data']) - len(cov['bads']))
     assert cov_sel['data'].shape == (cov_sel['dim'], cov_sel['dim'])
-    cov_sel.save(op.join(tempdir, 'test-cov.fif'))
+    cov_sel.save(tmpdir.join('test-cov.fif'))
 
     cov2 = read_cov(cov_gz_fname)
     assert_array_almost_equal(cov.data, cov2.data)
-    cov2.save(op.join(tempdir, 'test-cov.fif.gz'))
-    cov2 = read_cov(op.join(tempdir, 'test-cov.fif.gz'))
+    cov2.save(tmpdir.join('test-cov.fif.gz'))
+    cov2 = read_cov(tmpdir.join('test-cov.fif.gz'))
     assert_array_almost_equal(cov.data, cov2.data)
 
     # test warnings on bad filenames
-    cov_badname = op.join(tempdir, 'test-bad-name.fif.gz')
+    cov_badname = tmpdir.join('test-bad-name.fif.gz')
     with pytest.warns(RuntimeWarning, match='-cov.fif'):
         write_cov(cov_badname, cov)
     with pytest.warns(RuntimeWarning, match='-cov.fif'):
@@ -230,7 +230,6 @@ def test_io_cov(tmpdir):
 @pytest.mark.parametrize('method', (None, ['empirical']))
 def test_cov_estimation_on_raw(method, tmpdir):
     """Test estimation from raw (typically empty room)."""
-    tempdir = str(tmpdir)
     raw = read_raw_fif(raw_fname, preload=True)
     cov_mne = read_cov(erm_cov_fname)
 
@@ -251,8 +250,8 @@ def test_cov_estimation_on_raw(method, tmpdir):
     assert_snr(cov.data, cov_mne.data, 1e2)
 
     # test IO when computation done in Python
-    cov.save(op.join(tempdir, 'test-cov.fif'))  # test saving
-    cov_read = read_cov(op.join(tempdir, 'test-cov.fif'))
+    cov.save(tmpdir.join('test-cov.fif'))  # test saving
+    cov_read = read_cov(tmpdir.join('test-cov.fif'))
     assert cov_read.ch_names == cov.ch_names
     assert cov_read.nfree == cov.nfree
     assert_array_almost_equal(cov.data, cov_read.data)
@@ -308,7 +307,6 @@ def _assert_cov(cov, cov_desired, tol=0.005, nfree=True):
 @pytest.mark.parametrize('rank', ('full', None))
 def test_cov_estimation_with_triggers(rank, tmpdir):
     """Test estimation from raw with triggers."""
-    tempdir = str(tmpdir)
     raw = read_raw_fif(raw_fname)
     raw.set_eeg_reference(projection=True).load_data()
     events = find_events(raw, stim_channel='STI 014')
@@ -350,8 +348,8 @@ def test_cov_estimation_with_triggers(rank, tmpdir):
                   keep_sample_mean=False, method='shrunk', rank=rank)
 
     # test IO when computation done in Python
-    cov.save(op.join(tempdir, 'test-cov.fif'))  # test saving
-    cov_read = read_cov(op.join(tempdir, 'test-cov.fif'))
+    cov.save(tmpdir.join('test-cov.fif'))  # test saving
+    cov_read = read_cov(tmpdir.join('test-cov.fif'))
     _assert_cov(cov, cov_read, 1e-5)
 
     # cov with list of epochs with different projectors
@@ -669,8 +667,9 @@ def test_low_rank_cov(raw_epochs_events):
     cov_full = compute_covariance(epochs_meg, method='oas',
                                   rank='full', verbose='error')
     assert _cov_rank(cov_full, epochs_meg.info) == 306
-    with pytest.deprecated_call(match='int is deprecated'):
-        cov_dict = compute_covariance(epochs_meg, method='oas', rank=306)
+    with pytest.warns(RuntimeWarning, match='few samples'):
+        cov_dict = compute_covariance(epochs_meg, method='oas',
+                                      rank=dict(meg=306))
     assert _cov_rank(cov_dict, epochs_meg.info) == 306
     assert_allclose(cov_full['data'], cov_dict['data'])
     cov_dict = compute_covariance(epochs_meg, method='oas',
@@ -697,7 +696,6 @@ def test_low_rank_cov(raw_epochs_events):
                                  verbose='error')
     assert _cov_rank(dia_cov, epochs.info) == rank
     assert_allclose(dia_cov['data'], reg_cov['data'])
-    # test our deprecation: can simply remove later
     epochs.pick_channels(epochs.ch_names[:103])
     # degenerate
     with pytest.raises(ValueError, match='can.*only be used with rank="full"'):
@@ -736,6 +734,17 @@ def test_cov_ctf():
 
     # make sure comps matrices was not removed from raw
     assert raw.info['comps'], 'Comps matrices removed'
+
+
+def test_equalize_channels():
+    """Test equalization of channels for instances of Covariance."""
+    cov1 = make_ad_hoc_cov(create_info(['CH1', 'CH2', 'CH3', 'CH4'], sfreq=1.0,
+                                       ch_types='eeg'))
+    cov2 = make_ad_hoc_cov(create_info(['CH5', 'CH1', 'CH2'], sfreq=1.0,
+                                       ch_types='eeg'))
+    cov1, cov2 = equalize_channels([cov1, cov2])
+    assert cov1.ch_names == ['CH1', 'CH2']
+    assert cov2.ch_names == ['CH1', 'CH2']
 
 
 run_tests_if_main()

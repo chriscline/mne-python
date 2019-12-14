@@ -1,5 +1,5 @@
-# Authors: Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
-#          Matti Hamalainen <msh@nmr.mgh.harvard.edu>
+# Authors: Alexandre Gramfort <alexandre.gramfort@inria.fr>
+#          Matti Hämäläinen <msh@nmr.mgh.harvard.edu>
 #          Martin Luessi <mluessi@nmr.mgh.harvard.edu>
 #          Denis Engemann <denis.engemann@gmail.com>
 #          Teon Brooks <teon.brooks@gmail.com>
@@ -24,7 +24,7 @@ from ..utils import _mult_cal_one
 from ...annotations import Annotations, _read_annotations_fif
 
 from ...event import AcqParserFIF
-from ...utils import check_fname, logger, verbose, warn, fill_doc
+from ...utils import check_fname, logger, verbose, warn, fill_doc, _file_like
 
 
 @fill_doc
@@ -72,7 +72,7 @@ class Raw(BaseRaw):
     def __init__(self, fname, allow_maxshield=False, preload=False,
                  verbose=None):  # noqa: D102
         raws = []
-        do_check_fname = isinstance(fname, str)
+        do_check_fname = not _file_like(fname)
         next_fname = fname
         while next_fname is not None:
             raw, next_fname, buffer_size_sec = \
@@ -85,7 +85,7 @@ class Raw(BaseRaw):
                     warn('Split raw file detected but next file %s does not '
                          'exist.' % next_fname)
                     break
-        if not isinstance(fname, str):
+        if _file_like(fname):
             # avoid serialization error when copying file-like
             fname = None  # noqa
 
@@ -127,14 +127,12 @@ class Raw(BaseRaw):
         """Read in header information from a raw file."""
         logger.info('Opening raw data file %s...' % fname)
 
-        if do_check_fname:
-            check_fname(fname, 'raw', ('raw.fif', 'raw_sss.fif',
-                                       'raw_tsss.fif', 'raw.fif.gz',
-                                       'raw_sss.fif.gz', 'raw_tsss.fif.gz',
-                                       '_meg.fif'))
-
         #   Read in the whole file if preload is on and .fif.gz (saves time)
-        if isinstance(fname, str):
+        if not _file_like(fname):
+            if do_check_fname:
+                check_fname(fname, 'raw', (
+                    'raw.fif', 'raw_sss.fif', 'raw_tsss.fif', 'raw.fif.gz',
+                    'raw_sss.fif.gz', 'raw_tsss.fif.gz', '_meg.fif'))
             # filename
             fname = op.realpath(fname)
             ext = os.path.splitext(fname)[1].lower()
@@ -158,11 +156,12 @@ class Raw(BaseRaw):
             if len(raw_node) == 0:
                 raw_node = dir_tree_find(meas, FIFF.FIFFB_CONTINUOUS_DATA)
                 if (len(raw_node) == 0):
-                    raw_node = dir_tree_find(meas, FIFF.FIFFB_SMSH_RAW_DATA)
+                    raw_node = dir_tree_find(meas, FIFF.FIFFB_IAS_RAW_DATA)
                     if (len(raw_node) == 0):
                         raise ValueError('No raw data in %s' % fname_rep)
                     _check_maxshield(allow_maxshield)
                     info['maxshield'] = True
+            del meas
 
             if len(raw_node) == 1:
                 raw_node = raw_node[0]
@@ -412,7 +411,7 @@ class Raw(BaseRaw):
 
 
 def _get_fname_rep(fname):
-    if isinstance(fname, str):
+    if not _file_like(fname):
         return fname
     else:
         return 'File-like %r' % (fname,)

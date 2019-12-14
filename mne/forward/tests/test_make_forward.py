@@ -6,15 +6,16 @@ import pytest
 import numpy as np
 from numpy.testing import assert_equal, assert_allclose, assert_array_equal
 
+from mne.channels import make_standard_montage
 from mne.datasets import testing
 from mne.io import read_raw_fif, read_raw_kit, read_raw_bti, read_info
 from mne.io.constants import FIFF
 from mne import (read_forward_solution, write_forward_solution,
                  make_forward_solution, convert_forward_solution,
-                 setup_volume_source_space, read_source_spaces,
+                 setup_volume_source_space, read_source_spaces, create_info,
                  make_sphere_model, pick_types_forward, pick_info, pick_types,
                  read_evokeds, read_cov, read_dipole, SourceSpaces)
-from mne.utils import (requires_mne, requires_nibabel, _TempDir,
+from mne.utils import (requires_mne, requires_nibabel,
                        run_tests_if_main, run_subprocess)
 from mne.forward._make_forward import _create_meg_coils, make_forward_dipole
 from mne.forward._compute_forward import _magnetic_dipole_field_vec
@@ -119,7 +120,7 @@ def test_magnetic_dipole():
 @pytest.mark.timeout(60)  # can take longer than 30 sec on Travis
 @testing.requires_testing_data
 @requires_mne
-def test_make_forward_solution_kit():
+def test_make_forward_solution_kit(tmpdir):
     """Test making fwd using KIT, BTI, and CTF (compensated) files."""
     kit_dir = op.join(op.dirname(__file__), '..', '..', 'io', 'kit',
                       'tests', 'data')
@@ -141,8 +142,7 @@ def test_make_forward_solution_kit():
                             'data', 'test_ctf_comp_raw.fif')
 
     # first set up a small testing source space
-    temp_dir = _TempDir()
-    fname_src_small = op.join(temp_dir, 'sample-oct-2-src.fif')
+    fname_src_small = tmpdir.join('sample-oct-2-src.fif')
     src = setup_source_space('sample', 'oct2', subjects_dir=subjects_dir,
                              add_dist=False)
     write_source_spaces(fname_src_small, src)  # to enable working with MNE-C
@@ -207,8 +207,7 @@ def test_make_forward_solution_kit():
                                subjects_dir=subjects_dir)
     _compare_forwards(fwd, fwd_py, 274, n_src)
 
-    temp_dir = _TempDir()
-    fname_temp = op.join(temp_dir, 'test-ctf-fwd.fif')
+    fname_temp = tmpdir.join('test-ctf-fwd.fif')
     write_forward_solution(fname_temp, fwd_py)
     fwd_py2 = read_forward_solution(fname_temp)
     _compare_forwards(fwd_py, fwd_py2, 274, n_src)
@@ -248,14 +247,13 @@ def test_make_forward_solution_discrete():
 @testing.requires_testing_data
 @requires_mne
 @pytest.mark.timeout(90)  # can take longer than 60 sec on Travis
-def test_make_forward_solution_sphere():
+def test_make_forward_solution_sphere(tmpdir):
     """Test making a forward solution with a sphere model."""
-    temp_dir = _TempDir()
-    fname_src_small = op.join(temp_dir, 'sample-oct-2-src.fif')
+    fname_src_small = tmpdir.join('sample-oct-2-src.fif')
     src = setup_source_space('sample', 'oct2', subjects_dir=subjects_dir,
                              add_dist=False)
     write_source_spaces(fname_src_small, src)  # to enable working with MNE-C
-    out_name = op.join(temp_dir, 'tmp-fwd.fif')
+    out_name = tmpdir.join('tmp-fwd.fif')
     run_subprocess(['mne_forward_solution', '--meg', '--eeg',
                     '--meas', fname_raw, '--src', fname_src_small,
                     '--mri', fname_trans, '--fwd', out_name])
@@ -292,10 +290,9 @@ def test_make_forward_solution_sphere():
 
 @pytest.mark.slowtest
 @testing.requires_testing_data
-@requires_nibabel(False)
-def test_forward_mixed_source_space():
+@requires_nibabel()
+def test_forward_mixed_source_space(tmpdir):
     """Test making the forward solution for a mixed source space."""
-    temp_dir = _TempDir()
     # get the surface source space
     surf = read_source_spaces(fname_src)
 
@@ -327,7 +324,7 @@ def test_forward_mixed_source_space():
     assert ((coord_frames == FIFF.FIFFV_COORD_HEAD).all())
 
     # run tests for SourceSpaces.export_volume
-    fname_img = op.join(temp_dir, 'temp-image.mgz')
+    fname_img = tmpdir.join('temp-image.mgz')
 
     # head coordinates and mri_resolution, but trans file
     with pytest.raises(ValueError, match='trans containing mri to head'):
@@ -442,6 +439,22 @@ def test_make_forward_dipole():
                                    trans=fname_trans)
     assert isinstance(stc, VolSourceEstimate)
     assert_allclose(stc.times, np.arange(0., 0.003, 0.001))
+
+
+@testing.requires_testing_data
+def test_make_forward_no_meg(tmpdir):
+    """Test that we can make and I/O forward solution with no MEG channels."""
+    pos = dict(rr=[[0.05, 0, 0]], nn=[[0, 0, 1.]])
+    src = setup_volume_source_space(pos=pos)
+    bem = make_sphere_model()
+    trans = None
+    montage = make_standard_montage('standard_1020')
+    info = create_info(['Cz'], 1000., 'eeg', montage=montage)
+    fwd = make_forward_solution(info, trans, src, bem)
+    fname = tmpdir.join('test-fwd.fif')
+    write_forward_solution(fname, fwd)
+    fwd_read = read_forward_solution(fname)
+    assert_allclose(fwd['sol']['data'], fwd_read['sol']['data'])
 
 
 run_tests_if_main()

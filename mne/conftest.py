@@ -3,7 +3,10 @@
 #
 # License: BSD (3-clause)
 
+import os
 import os.path as op
+import shutil
+import sys
 import warnings
 import pytest
 # For some unknown reason, on Travis-xenial there are segfaults caused on
@@ -22,12 +25,14 @@ except Exception:
 import numpy as np
 import mne
 from mne.datasets import testing
+from mne.fixes import _fn35
 
 test_path = testing.data_path(download=False)
 s_path = op.join(test_path, 'MEG', 'sample')
 fname_evoked = op.join(s_path, 'sample_audvis_trunc-ave.fif')
 fname_cov = op.join(s_path, 'sample_audvis_trunc-cov.fif')
 fname_fwd = op.join(s_path, 'sample_audvis_trunc-meg-eeg-oct-4-fwd.fif')
+subjects_dir = op.join(test_path, 'subjects')
 
 
 def pytest_configure(config):
@@ -37,7 +42,7 @@ def pytest_configure(config):
         config.addinivalue_line('markers', marker)
 
     # Fixtures
-    for fixture in ('matplotlib_config',):
+    for fixture in ('matplotlib_config', 'fix_pytest_tmpdir_35'):
         config.addinivalue_line('usefixtures', fixture)
 
     # Warnings
@@ -45,7 +50,7 @@ def pytest_configure(config):
     #   we should remove them from here.
     # - This list should also be considered alongside reset_warnings in
     #   doc/conf.py.
-    warning_lines = """
+    warning_lines = r"""
     error::
     ignore::ImportWarning
     ignore:the matrix subclass:PendingDeprecationWarning
@@ -68,6 +73,11 @@ def pytest_configure(config):
     ignore:numpy.ufunc size changed:RuntimeWarning
     ignore:.*mne-realtime.*:DeprecationWarning
     ignore:.*imp.*:DeprecationWarning
+    ignore:Exception creating Regex for oneOf.*:SyntaxWarning
+    ignore:scipy\.gradient is deprecated.*:DeprecationWarning
+    ignore:sklearn\.externals\.joblib is deprecated.*:FutureWarning
+    ignore:The sklearn.*module.*deprecated.*:FutureWarning
+    always:.*get_data.* is deprecated in favor of.*:DeprecationWarning
     """  # noqa: E501
     for warning_line in warning_lines.split('\n'):
         warning_line = warning_line.strip()
@@ -82,6 +92,7 @@ def matplotlib_config():
     # "force" should not really be necessary but should not hurt
     kwargs = dict()
     with warnings.catch_warnings(record=True):  # ignore warning
+        warnings.filterwarnings('ignore')
         matplotlib.use('agg', force=True, **kwargs)  # don't pop up windows
     import matplotlib.pyplot as plt
     assert plt.get_backend() == 'agg'
@@ -96,13 +107,29 @@ def matplotlib_config():
         pass
     else:
         ETSConfig.toolkit = 'qt4'
-    try:
-        with warnings.catch_warnings(record=True):  # traits
-            from mayavi import mlab
-    except Exception:
-        pass
-    else:
-        mlab.options.backend = 'test'
+    from mne.viz.backends.renderer import _enable_3d_backend_testing
+    _enable_3d_backend_testing()
+
+
+def _replace(mod, key):
+    orig = getattr(mod, key)
+
+    def func(x, *args, **kwargs):
+        return orig(_fn35(x), *args, **kwargs)
+
+    setattr(mod, key, func)
+
+
+@pytest.fixture(scope='session')
+def fix_pytest_tmpdir_35():
+    """Deal with tmpdir being a LocalPath, which bombs on 3.5."""
+    if sys.version_info >= (3, 6):
+        return
+
+    for key in ('stat', 'mkdir', 'makedirs'):
+        _replace(os, key)
+    for key in ('split', 'splitext', 'realpath', 'join'):
+        _replace(op, key)
 
 
 @pytest.fixture(scope='function', params=[testing._pytest_param()])
@@ -178,3 +205,11 @@ def renderer(backend_name):
         from mne.viz.backends import renderer
         yield renderer
         renderer._close_all()
+
+
+@pytest.fixture(scope='function', params=[testing._pytest_param()])
+def subjects_dir_tmp(tmpdir):
+    """Copy MNE-testing-data subjects_dir to a temp dir for manipulation."""
+    for key in ('sample', 'fsaverage'):
+        shutil.copytree(op.join(subjects_dir, key), str(tmpdir.join(key)))
+    return str(tmpdir)

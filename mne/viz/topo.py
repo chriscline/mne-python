@@ -1,6 +1,6 @@
 """Functions to plot M/EEG data on topo (one axes per channel)."""
 
-# Authors: Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
+# Authors: Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #          Denis Engemann <denis.engemann@gmail.com>
 #          Martin Luessi <mluessi@nmr.mgh.harvard.edu>
 #          Eric Larson <larson.eric.d@gmail.com>
@@ -19,7 +19,7 @@ from ..channels.layout import _merge_grad_data, _pair_grad_sensors, find_layout
 from ..defaults import _handle_default
 from .utils import (_check_delayed_ssp, _get_color_list, _draw_proj_checkbox,
                     add_background_image, plt_show, _setup_vmin_vmax,
-                    DraggableColorbar, _set_ax_facecolor, _setup_ax_spines,
+                    DraggableColorbar, _setup_ax_spines,
                     _check_cov, _plot_masked_image)
 
 
@@ -40,11 +40,11 @@ def iter_topography(info, layout=None, on_pick=None, fig=None,
     info : instance of Info
         The measurement info.
     layout : instance of mne.layout.Layout | None
-        The layout to use. If None, layout will be guessed
+        The layout to use. If None, layout will be guessed.
     on_pick : callable | None
         The callback function to be invoked on clicking one
         of the axes. Is supposed to instantiate the following
-        API: `function(axis, channel_index)`
+        API: ``function(axis, channel_index)``.
     fig : matplotlib.figure.Figure | None
         The figure object to be considered. If None, a new
         figure will be created.
@@ -55,23 +55,23 @@ def iter_topography(info, layout=None, on_pick=None, fig=None,
     axis_spinecolor : color
         The axis spine color. Defaults to black. In other words,
         the color of the axis' edge lines.
-    layout_scale: float | None
+    layout_scale : float | None
         Scaling factor for adjusting the relative size of the layout
         on the canvas. If None, nothing will be scaled.
-    legend: bool
+    legend : bool
         If True, an additional axis is created in the bottom right corner
         that can be used to, e.g., construct a legend. The index of this
         axis will be -1.
 
     Returns
     -------
-    A generator that can be unpacked into:
+    gen : generator
+        A generator that can be unpacked into:
 
         ax : matplotlib.axis.Axis
             The current axis of the topo plot.
         ch_dx : int
             The related channel index.
-
     """
     return _iter_topography(info, layout, on_pick, fig, fig_facecolor,
                             axis_facecolor, axis_spinecolor, layout_scale,
@@ -212,7 +212,7 @@ def _plot_topo(info, times, show_func, click_func=None, layout=None,
     if axes is None:
         fig = plt.figure()
         axes = plt.axes([0.015, 0.025, 0.97, 0.95])
-        _set_ax_facecolor(axes, fig_facecolor)
+        axes.set_facecolor(fig_facecolor)
     else:
         fig = axes.figure
     if colorbar:
@@ -272,7 +272,7 @@ def _plot_topo_onpick(event, show_func):
         fig, ax = plt.subplots(1)
 
         plt.title(orig_ax._mne_ch_name)
-        _set_ax_facecolor(ax, face_color)
+        ax.set_facecolor(face_color)
 
         # allow custom function to override parameters
         show_func(ax, ch_idx)
@@ -582,15 +582,15 @@ def _plot_evoked_topo(evoked, layout=None, layout_scale=0.945, color=None,
         Layout instance specifying sensor positions (does not need to
         be specified for Neuromag data). If possible, the correct layout is
         inferred from the data.
-    layout_scale: float
+    layout_scale : float
         Scaling factor for adjusting the relative size of the layout
-        on the canvas
+        on the canvas.
     color : list of color objects | color object | None
         Everything matplotlib accepts to specify colors. If not list-like,
         the color specified will be repeated. If None, colors are
         automatically drawn.
     border : str
-        matplotlib borders style to be used for each sensor plot.
+        Matplotlib borders style to be used for each sensor plot.
     ylim : dict | None
         ylim for plots (after scaling has been applied). The value
         determines the upper and lower subplot limits. e.g.
@@ -834,7 +834,7 @@ def plot_topo_image_epochs(epochs, layout=None, sigma=0., vmin=None,
     ----------
     epochs : instance of :class:`~mne.Epochs`
         The epochs.
-    layout: instance of Layout
+    layout : instance of Layout
         System specific sensor positions.
     sigma : float
         The standard deviation of the Gaussian smoothing to apply along
@@ -856,8 +856,8 @@ def plot_topo_image_epochs(epochs, layout=None, sigma=0., vmin=None,
         (data.shape[1] == len(times)).
     cmap : colormap
         Colors to be mapped to the values.
-    layout_scale: float
-        scaling factor for adjusting the relative size of the layout
+    layout_scale : float
+        Scaling factor for adjusting the relative size of the layout
         on the canvas.
     title : str
         Title of the figure.
@@ -865,7 +865,7 @@ def plot_topo_image_epochs(epochs, layout=None, sigma=0., vmin=None,
         The scalings of the channel types to be applied for plotting. If
         ``None``, defaults to `dict(eeg=1e6, grad=1e13, mag=1e15)`.
     border : str
-        matplotlib borders style to be used for each sensor plot.
+        Matplotlib borders style to be used for each sensor plot.
     fig_facecolor : color
         The figure face color. Defaults to black.
     fig_background : None | array

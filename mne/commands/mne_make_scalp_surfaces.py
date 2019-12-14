@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 
 # Authors: Denis A. Engemann  <denis.engemann@gmail.com>
-#          Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
-#          Matti Hamalainen <msh@nmr.mgh.harvard.edu>
+#          Alexandre Gramfort <alexandre.gramfort@inria.fr>
+#          Matti Hämäläinen <msh@nmr.mgh.harvard.edu>
 #
 #          simplified bsd-3 license
 
@@ -15,10 +15,11 @@ Examples
     $ mne make_scalp_surfaces --overwrite --subject sample
 
 """
-import os
 import copy
+import os
 import os.path as op
 import sys
+
 import mne
 from mne.utils import (run_subprocess, verbose, logger, ETSContext,
                        get_subjects_dir)
@@ -33,7 +34,7 @@ def _check_file(fname, overwrite):
 
 def run():
     """Run command."""
-    from mne.commands.utils import get_optparser
+    from mne.commands.utils import get_optparser, _add_verbose_flag
 
     parser = get_optparser(__file__)
     subjects_dir = mne.get_config('SUBJECTS_DIR')
@@ -45,13 +46,12 @@ def run():
                       help='The name of the subject', type='str')
     parser.add_option('-f', '--force', dest='force', action='store_true',
                       help='Force transformation of surface into bem.')
-    parser.add_option('-v', '--verbose', dest='verbose', action='store_true',
-                      help='Print the debug messages.')
     parser.add_option("-d", "--subjects-dir", dest="subjects_dir",
                       help="Subjects directory", default=subjects_dir)
     parser.add_option("-n", "--no-decimate", dest="no_decimate",
                       help="Disable medium and sparse decimations "
                       "(dense only)", action='store_true')
+    _add_verbose_flag(parser)
     options, args = parser.parse_args()
 
     subject = vars(options).get('subject', os.getenv('SUBJECT'))
@@ -134,5 +134,4 @@ def _run(subjects_dir, subject, force, overwrite, no_decimate, verbose=None):
         mne.write_bem_surfaces(dec_fname, dec_surf)
 
 
-if (__name__ == '__main__'):
-    run()
+mne.utils.run_command_if_main()

@@ -1,8 +1,12 @@
-# Authors: Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
-#          Matti Hamalainen <msh@nmr.mgh.harvard.edu>
+# Authors: Matti Hämäläinen <msh@nmr.mgh.harvard.edu>
+#          Alexandre Gramfort <alexandre.gramfort@inria.fr>
+#          Matti Hämäläinen <msh@nmr.mgh.harvard.edu>
 #          Denis A. Engemann <denis.engemann@gmail.com>
 #
 # License: BSD (3-clause)
+
+# Many of the computations in this code were derived from Matti Hämäläinen's
+# C code.
 
 from copy import deepcopy
 from distutils.version import LooseVersion
@@ -24,11 +28,12 @@ from .io.tag import find_tag
 from .io.write import (write_int, start_file, end_block, start_block, end_file,
                        write_string, write_float_sparse_rcs)
 from .channels.channels import _get_meg_system
+from .parallel import parallel_func
 from .transforms import (transform_surface_to, _pol_to_cart, _cart_to_sph,
-                         _get_trans, apply_trans)
-from .utils import logger, verbose, get_subjects_dir, warn
+                         _get_trans, apply_trans, Transform)
+from .utils import logger, verbose, get_subjects_dir, warn, _check_fname
 from .fixes import (_serialize_volume_info, _get_read_geometry, einsum, jit,
-                    prange)
+                    prange, bincount)
 
 
 ###############################################################################
@@ -161,7 +166,10 @@ def get_meg_helmet_surf(info, trans=None, verbose=None):
 
     # Ignore what the file says, it's in device coords and we want MRI coords
     surf['coord_frame'] = FIFF.FIFFV_COORD_DEVICE
-    transform_surface_to(surf, 'head', info['dev_head_t'])
+    dev_head_t = info['dev_head_t']
+    if dev_head_t is None:
+        dev_head_t = Transform('meg', 'head')
+    transform_surface_to(surf, 'head', dev_head_t)
     if trans is not None:
         transform_surface_to(surf, 'mri', trans)
     return surf
@@ -210,17 +218,23 @@ def fast_cross_3d(x, y):
     assert y.shape[-1] == 3
     if max(x.size, y.size) >= 500:
         out = np.empty(np.broadcast(x, y).shape)
-        np.multiply(x[..., 1], y[..., 2], out=out[..., 0])
-        out[..., 0] -= x[..., 2] * y[..., 1]
-        np.multiply(x[..., 2], y[..., 0], out=out[..., 1])
-        out[..., 1] -= x[..., 0] * y[..., 2]
-        np.multiply(x[..., 0], y[..., 1], out=out[..., 2])
-        out[..., 2] -= x[..., 1] * y[..., 0]
+        _jit_cross(out, x, y)
         return out
     else:
         return np.cross(x, y)
 
 
+@jit()
+def _jit_cross(out, x, y):
+    out[..., 0] = x[..., 1] * y[..., 2]
+    out[..., 0] -= x[..., 2] * y[..., 1]
+    out[..., 1] = x[..., 2] * y[..., 0]
+    out[..., 1] -= x[..., 0] * y[..., 2]
+    out[..., 2] = x[..., 0] * y[..., 1]
+    out[..., 2] -= x[..., 1] * y[..., 0]
+
+
+@jit()
 def _fast_cross_nd_sum(a, b, c):
     """Fast cross and sum."""
     return ((a[..., 1] * b[..., 2] - a[..., 2] * b[..., 1]) * c[..., 0] +
@@ -228,6 +242,7 @@ def _fast_cross_nd_sum(a, b, c):
             (a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]) * c[..., 2])
 
 
+@jit()
 def _accumulate_normals(tris, tri_nn, npts):
     """Efficiently accumulate triangle normals."""
     # this code replaces the following, but is faster (vectorized):
@@ -238,10 +253,11 @@ def _accumulate_normals(tris, tri_nn, npts):
     #     this['nn'][verts, :] += this['tri_nn'][p, :]
     #
     nn = np.zeros((npts, 3))
-    for verts in tris.T:  # note this only loops 3x (number of verts per tri)
+    for vi in range(3):
+        verts = tris[:, vi]
         for idx in range(3):  # x, y, z
-            nn[:, idx] += np.bincount(verts, weights=tri_nn[:, idx],
-                                      minlength=npts)
+            nn[:, idx] += bincount(verts, weights=tri_nn[:, idx],
+                                   minlength=npts)
     return nn
 
 
@@ -301,7 +317,7 @@ def _project_onto_surface(rrs, surf, project_rrs=False, return_nn=False,
         idx = _compute_nearest(surf['rr'], rrs)
         out = (None, None, surf['rr'][idx])
         if return_nn:
-            nn = _accumulate_normals(surf['tris'], surf_geom['nn'],
+            nn = _accumulate_normals(surf['tris'].astype(int), surf_geom['nn'],
                                      len(surf['rr']))
             out += (nn[idx],)
     return out
@@ -350,7 +366,8 @@ def complete_surface_info(surf, do_neighbor_vert=False, copy=True,
     #    Find neighboring triangles, accumulate vertex normals, normalize
     logger.info('    Triangle neighbors and vertex normals...')
     surf['neighbor_tri'] = _triangle_neighbors(surf['tris'], surf['np'])
-    surf['nn'] = _accumulate_normals(surf['tris'], surf['tri_nn'], surf['np'])
+    surf['nn'] = _accumulate_normals(surf['tris'].astype(int),
+                                     surf['tri_nn'], surf['np'])
     _normalize_vectors(surf['nn'])
 
     #   Check for topological defects
@@ -498,6 +515,80 @@ class _DistanceQuery(object):
         if method == 'cdist':
             self.query = _CDist(xhs).query
 
+        self.data = xhs
+
+
+@verbose
+def _points_outside_surface(rr, surf, n_jobs=1, verbose=None):
+    """Check whether points are outside a surface.
+
+    Parameters
+    ----------
+    rr : ndarray
+        Nx3 array of points to check.
+    surf : dict
+        Surface with entries "rr" and "tris".
+
+    Returns
+    -------
+    outside : ndarray
+        1D logical array of size N for which points are outside the surface.
+    """
+    rr = np.atleast_2d(rr)
+    assert rr.shape[1] == 3
+    assert n_jobs > 0
+    parallel, p_fun, _ = parallel_func(_get_solids, n_jobs)
+    tot_angles = parallel(p_fun(surf['rr'][tris], rr)
+                          for tris in np.array_split(surf['tris'], n_jobs))
+    return np.abs(np.sum(tot_angles, axis=0) / (2 * np.pi) - 1.0) > 1e-5
+
+
+class _CheckInside(object):
+    """Efficiently check if points are inside a surface."""
+
+    def __init__(self, surf):
+        from scipy.spatial import Delaunay
+        self.surf = surf
+        self.inner_r = None
+        self.cm = surf['rr'].mean(0)
+        if not _points_outside_surface(
+                self.cm[np.newaxis], surf)[0]:  # actually inside
+            # Immediately cull some points from the checks
+            self.inner_r = np.linalg.norm(surf['rr'] - self.cm, axis=-1).min()
+        # We could use Delaunay or ConvexHull here, Delaunay is slightly slower
+        # to construct but faster to evaluate
+        # See https://stackoverflow.com/questions/16750618/whats-an-efficient-way-to-find-if-a-point-lies-in-the-convex-hull-of-a-point-cl  # noqa
+        self.del_tri = Delaunay(surf['rr'])
+
+    @verbose
+    def __call__(self, rr, n_jobs=1, verbose=None):
+        inside = np.ones(len(rr), bool)  # innocent until proven guilty
+        idx = np.arange(len(rr))
+
+        # Limit to indices that can plausibly be outside the surf
+        if self.inner_r is not None:
+            mask = np.linalg.norm(rr - self.cm, axis=-1) >= self.inner_r
+            idx = idx[mask]
+            rr = rr[mask]
+            logger.info('    Skipping interior check for %d sources that fit '
+                        'inside a sphere of radius %6.1f mm'
+                        % ((~mask).sum(), self.inner_r * 1000))
+
+        # Use qhull as our first pass (*much* faster than our check)
+        del_outside = self.del_tri.find_simplex(rr) < 0
+        omit_outside = sum(del_outside)
+        inside[idx[del_outside]] = False
+        idx = idx[~del_outside]
+        rr = rr[~del_outside]
+        logger.info('    Skipping solid angle check for %d points using Qhull'
+                    % (omit_outside,))
+
+        # use our more accurate check
+        solid_outside = _points_outside_surface(rr, self.surf, n_jobs)
+        omit_outside += np.sum(solid_outside)
+        inside[idx[solid_outside]] = False
+        return inside
+
 
 ###############################################################################
 # Handle freesurfer
@@ -575,6 +666,7 @@ def read_surface(fname, read_metadata=False, return_dict=False, verbose=None):
     write_surface
     read_tri
     """
+    fname = _check_fname(fname, 'read', True)
     ret = _get_read_geometry()(fname, read_metadata=read_metadata)
     if return_dict:
         ret += (dict(rr=ret[0], tris=ret[1], ntri=len(ret[1]), use_tris=ret[1],
@@ -794,7 +886,8 @@ def _decimate_surface_spacing(surf, spacing):
     return surf
 
 
-def write_surface(fname, coords, faces, create_stamp='', volume_info=None):
+def write_surface(fname, coords, faces, create_stamp='', volume_info=None,
+                  overwrite=False):
     """Write a triangular Freesurfer surface mesh.
 
     Accepts the same data format as is returned by read_surface().
@@ -826,12 +919,15 @@ def write_surface(fname, coords, faces, create_stamp='', volume_info=None):
             * 'cras' : array of float, shape (3,)
 
         .. versionadded:: 0.13.0
+    overwrite : bool
+        If True, overwrite the file if it exists.
 
     See Also
     --------
     read_surface
     read_tri
     """
+    fname = _check_fname(fname, overwrite=overwrite)
     try:
         import nibabel as nib
         has_nibabel = True
@@ -933,11 +1029,11 @@ def read_morph_map(subject_from, subject_to, subjects_dir=None, xhemi=False,
 
     Parameters
     ----------
-    subject_from : string
+    subject_from : str
         Name of the original subject as named in the SUBJECTS_DIR.
-    subject_to : string
+    subject_to : str
         Name of the subject on which to morph as named in the SUBJECTS_DIR.
-    subjects_dir : string
+    subjects_dir : str
         Path to SUBJECTS_DIR is not set in the environment.
     xhemi : bool
         Morph across hemisphere. Currently only implemented for
@@ -1314,14 +1410,14 @@ def mesh_dist(tris, vert):
     Parameters
     ----------
     tris : array (n_tris x 3)
-        Mesh triangulation
+        Mesh triangulation.
     vert : array (n_vert x 3)
-        Vertex locations
+        Vertex locations.
 
     Returns
     -------
     dist_matrix : scipy.sparse.csr_matrix
-        Sparse matrix with distances between adjacent vertices
+        Sparse matrix with distances between adjacent vertices.
     """
     edges = mesh_edges(tris).tocoo()
 
@@ -1352,14 +1448,14 @@ def read_tri(fname_in, swap=False, verbose=None):
         Triangulation (each line contains indices for three points which
         together form a face).
 
-    Notes
-    -----
-    .. versionadded:: 0.13.0
-
     See Also
     --------
     read_surface
     write_surface
+
+    Notes
+    -----
+    .. versionadded:: 0.13.0
     """
     with open(fname_in, "r") as fid:
         lines = fid.readlines()
@@ -1388,38 +1484,27 @@ def read_tri(fname_in, swap=False, verbose=None):
     return (rr, tris)
 
 
+@jit()
 def _get_solids(tri_rrs, fros):
     """Compute _sum_solids_div total angle in chunks."""
     # NOTE: This incorporates the division by 4PI that used to be separate
-    # for tri_rr in tri_rrs:
-    #     v1 = fros - tri_rr[0]
-    #     v2 = fros - tri_rr[1]
-    #     v3 = fros - tri_rr[2]
-    #     triple = np.sum(fast_cross_3d(v1, v2) * v3, axis=1)
-    #     l1 = np.sqrt(np.sum(v1 * v1, axis=1))
-    #     l2 = np.sqrt(np.sum(v2 * v2, axis=1))
-    #     l3 = np.sqrt(np.sum(v3 * v3, axis=1))
-    #     s = (l1 * l2 * l3 +
-    #          np.sum(v1 * v2, axis=1) * l3 +
-    #          np.sum(v1 * v3, axis=1) * l2 +
-    #          np.sum(v2 * v3, axis=1) * l1)
-    #     tot_angle -= np.arctan2(triple, s)
-
-    # This is the vectorized version, but with a slicing heuristic to
-    # prevent memory explosion
     tot_angle = np.zeros((len(fros)))
-    slices = np.r_[np.arange(0, len(fros), 100), [len(fros)]]
-    for i1, i2 in zip(slices[:-1], slices[1:]):
-        # shape (3 verts, n_tri, n_fro, 3 X/Y/Z)
-        vs = (fros[np.newaxis, np.newaxis, i1:i2] -
-              tri_rrs.transpose([1, 0, 2])[:, :, np.newaxis])
-        triples = _fast_cross_nd_sum(vs[0], vs[1], vs[2])
-        ls = np.linalg.norm(vs, axis=3)
-        ss = np.prod(ls, axis=0)
-        ss += einsum('ijk,ijk,ij->ij', vs[0], vs[1], ls[2])
-        ss += einsum('ijk,ijk,ij->ij', vs[0], vs[2], ls[1])
-        ss += einsum('ijk,ijk,ij->ij', vs[1], vs[2], ls[0])
-        tot_angle[i1:i2] = -np.sum(np.arctan2(triples, ss), axis=0)
+    for ti in range(len(tri_rrs)):
+        tri_rr = tri_rrs[ti]
+        v1 = fros - tri_rr[0]
+        v2 = fros - tri_rr[1]
+        v3 = fros - tri_rr[2]
+        v4 = np.empty((v1.shape[0], 3))
+        _jit_cross(v4, v1, v2)
+        triple = np.sum(v4 * v3, axis=1)
+        l1 = np.sqrt(np.sum(v1 * v1, axis=1))
+        l2 = np.sqrt(np.sum(v2 * v2, axis=1))
+        l3 = np.sqrt(np.sum(v3 * v3, axis=1))
+        s = (l1 * l2 * l3 +
+             np.sum(v1 * v2, axis=1) * l3 +
+             np.sum(v1 * v3, axis=1) * l2 +
+             np.sum(v2 * v3, axis=1) * l1)
+        tot_angle -= np.arctan2(triple, s)
     return tot_angle
 
 

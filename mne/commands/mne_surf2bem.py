@@ -10,7 +10,7 @@ Examples
         --id=4
 
 """
-# Authors: Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
+# Authors: Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #
 # License: BSD (3-clause)
 
@@ -44,6 +44,4 @@ def run():
     mne.write_bem_surfaces(options.fif, surf)
 
 
-is_main = (__name__ == '__main__')
-if is_main:
-    run()
+mne.utils.run_command_if_main()

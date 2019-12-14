@@ -87,7 +87,7 @@ raw.plot()
 #   - When the plot window is closed, the :class:`~mne.io.Raw` object's
 #     ``info`` attribute will be updated, adding or removing the newly
 #     (un)marked channels to/from the :class:`~mne.Info` object's ``bads``
-#     field (AKA ``raw.info['bads']``).
+#     field (A.K.A. ``raw.info['bads']``).
 #
 # .. TODO: discuss annotation snapping in the below bullets
 #
@@ -165,11 +165,13 @@ raw.copy().pick_types(meg=False, eeg=True).plot_psd_topo()
 # with the :meth:`~mne.io.Raw.plot_sensors` method. A brief example is shown
 # here; notice that channels in ``raw.info['bads']`` are plotted in red. More
 # details and additional examples are given in the tutorial
-# :doc:`../misc/plot_sensor_locations`.
+# :ref:`tut-sensor-locations`.
 
 raw.plot_sensors(ch_type='eeg')
 
 ###############################################################################
+# .. _`tut-section-raw-plot-proj`:
+#
 # Plotting projectors from ``Raw`` objects
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 #
@@ -181,12 +183,10 @@ raw.plot_sensors(ch_type='eeg')
 # show one figure per channel type for which projectors are present, and each
 # figure will have one subplot per projector. The three projectors in this file
 # were only computed for magnetometers, so one figure with three subplots is
-# generated.
-#
-# .. TODO: More details on working with and plotting projectors are given in
-#    <add crossref here>
+# generated. More details on working with and plotting projectors are given in
+# :ref:`tut-projectors-background` and :ref:`tut-artifact-ssp`.
 
-raw.plot_projs_topomap()
+raw.plot_projs_topomap(colorbar=True)
 
 ###############################################################################
 # .. LINKS

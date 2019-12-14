@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # Authors: Thorsten Kranz <thorstenkranz@gmail.com>
-#          Alexandre Gramfort <alexandre.gramfort@telecom-paristech.fr>
+#          Alexandre Gramfort <alexandre.gramfort@inria.fr>
 #          Martin Luessi <mluessi@nmr.mgh.harvard.edu>
 #          Eric Larson <larson.eric.d@gmail.com>
 #          Denis Engemann <denis.engemann@gmail.com>
@@ -353,7 +353,7 @@ def _find_clusters(x, threshold, tail=0, connectivity=None, max_step=1,
     clusters : list of slices or list of arrays (boolean masks)
         We use slices for 1D signals and mask to multidimensional
         arrays.
-    sums: array
+    sums : array
         Sum of x values in clusters.
     """
     from scipy import ndimage
@@ -570,15 +570,22 @@ def _pval_from_histogram(T, H0, tail):
     return pval
 
 
-def _setup_connectivity(connectivity, n_vertices, n_times):
+def _setup_connectivity(connectivity, n_tests, n_times):
     if not sparse.issparse(connectivity):
-        raise ValueError("If connectivity matrix is given, it must be a"
-                         "scipy sparse matrix.")
-    if connectivity.shape[0] == n_vertices:  # use global algorithm
+        raise ValueError("If connectivity matrix is given, it must be a "
+                         "SciPy sparse matrix.")
+    if connectivity.shape[0] == n_tests:  # use global algorithm
         connectivity = connectivity.tocoo()
     else:  # use temporal adjacency algorithm
-        if not round(n_vertices / float(connectivity.shape[0])) == n_times:
-            raise ValueError('connectivity must be of the correct size')
+        got_times, mod = divmod(n_tests, connectivity.shape[0])
+        if got_times != n_times or mod != 0:
+            raise ValueError(
+                'connectivity (len %d) must be of the correct size, i.e. be '
+                'equal to or evenly divide the number of tests (%d).\n\n'
+                'If connectivity was computed for a source space, try using '
+                'the fwd["src"] or inv["src"] as some original source space '
+                'vertices can be excluded during forward computation'
+                % (connectivity.shape[0], n_tests))
         # we claim to only use upper triangular part... not true here
         connectivity = (connectivity + connectivity.transpose()).tocsr()
         connectivity = [connectivity.indices[connectivity.indptr[i]:
@@ -810,11 +817,12 @@ def _permutation_cluster_test(X, threshold, n_permutations, tail, stat_fun,
     is elicited.
     """
     _check_option('out_type', out_type, ['mask', 'indices'])
-    if not isinstance(threshold, dict) and (tail < 0 and threshold > 0 or
-                                            tail > 0 and threshold < 0 or
-                                            tail == 0 and threshold < 0):
-        raise ValueError('incompatible tail and threshold signs, got %s and %s'
-                         % (tail, threshold))
+    if not isinstance(threshold, dict):
+        threshold = float(threshold)
+        if (tail < 0 and threshold > 0 or tail > 0 and threshold < 0 or
+                tail == 0 and threshold < 0):
+            raise ValueError('incompatible tail and threshold signs, got '
+                             '%s and %s' % (tail, threshold))
 
     # check dimensions for each group in X (a list at this stage).
     X = [x[:, np.newaxis] if x.ndim == 1 else x for x in X]
@@ -1071,7 +1079,7 @@ def permutation_cluster_test(
         maximum number of steps between vertices along the second dimension
         (typically time) to be considered connected. This is not used for full
         or None connectivity matrices.
-    exclude : boolean array or None
+    exclude : bool array or None
         Mask to apply to the data to exclude certain points from clustering
         (e.g., medial wall vertices). Should be the same shape as X. If None,
         no points are excluded.
@@ -1097,7 +1105,7 @@ def permutation_cluster_test(
         determine of it can be separated into disjoint sets. In some cases
         (usually with connectivity as a list and many "time" points), this
         can lead to faster clustering, but results should be identical.
-    buffer_size: int or None
+    buffer_size : int or None
         The statistics will be computed for blocks of variables of size
         "buffer_size" at a time. This is option significantly reduces the
         memory requirements when n_jobs > 1 and memory sharing between
@@ -1113,7 +1121,7 @@ def permutation_cluster_test(
     clusters : list
         List type defined by out_type above.
     cluster_pv : array
-        P-value for each cluster
+        P-value for each cluster.
     H0 : array, shape (n_permutations,)
         Max cluster level stats observed under permutation.
 
@@ -1181,7 +1189,7 @@ def permutation_cluster_1samp_test(
         maximum number of steps between vertices along the second dimension
         (typically time) to be considered connected. This is not used for full
         or None connectivity matrices.
-    exclude : boolean array or None
+    exclude : bool array or None
         Mask to apply to the data to exclude certain points from clustering
         (e.g., medial wall vertices). Should be the same shape as X. If None,
         no points are excluded.
@@ -1207,7 +1215,7 @@ def permutation_cluster_1samp_test(
         determine of it can be separated into disjoint sets. In some cases
         (usually with connectivity as a list and many "time" points), this
         can lead to faster clustering, but results should be identical.
-    buffer_size: int or None
+    buffer_size : int or None
         The statistics will be computed for blocks of variables of size
         "buffer_size" at a time. This is option significantly reduces the
         memory requirements when n_jobs > 1 and memory sharing between
@@ -1218,11 +1226,11 @@ def permutation_cluster_1samp_test(
     Returns
     -------
     t_obs : array, shape (n_tests,)
-        t-statistic observed for all variables
+        T-statistic observed for all variables.
     clusters : list
         List type defined by out_type above.
     cluster_pv : array
-        P-value for each cluster
+        P-value for each cluster.
     H0 : array, shape (n_permutations,)
         Max cluster level stats observed under permutation.
 
@@ -1338,7 +1346,7 @@ def spatio_temporal_cluster_1samp_test(
         determine of it can be separated into disjoint sets. In some cases
         (usually with connectivity as a list and many "time" points), this
         can lead to faster clustering, but results should be identical.
-    buffer_size: int or None
+    buffer_size : int or None
         The statistics will be computed for blocks of variables of size
         "buffer_size" at a time. This is option significantly reduces the
         memory requirements when n_jobs > 1 and memory sharing between
@@ -1350,11 +1358,11 @@ def spatio_temporal_cluster_1samp_test(
     Returns
     -------
     t_obs : array, shape (n_times * n_vertices,)
-        t-statistic observed for all variables.
+        T-statistic observed for all variables.
     clusters : list
         List type defined by out_type above.
-    cluster_pv: array
-        P-value for each cluster
+    cluster_pv : array
+        P-value for each cluster.
     H0 : array, shape (n_permutations,)
         Max cluster level stats observed under permutation.
 
@@ -1396,7 +1404,7 @@ def spatio_temporal_cluster_test(
 
     Parameters
     ----------
-    X: list of arrays
+    X : list of array
         List of data arrays, shape ``(n_observations, n_times, n_vertices)``
         in each group.
     threshold : float | dict | None
@@ -1406,7 +1414,7 @@ def spatio_temporal_cluster_test(
         cluster enhancement (TFCE) will be used, and it must have keys
         ``'start'`` and ``'step'`` to specify the integration parameters,
         see the :ref:`TFCE example <tfce_example>`.
-    n_permutations: int
+    n_permutations : int
         See permutation_cluster_test.
     tail : -1 or 0 or 1 (default = 0)
         See permutation_cluster_test.
@@ -1449,7 +1457,7 @@ def spatio_temporal_cluster_test(
         determine of it can be separated into disjoint sets. In some cases
         (usually with connectivity as a list and many "time" points), this
         can lead to faster clustering, but results should be identical.
-    buffer_size: int or None
+    buffer_size : int or None
         The statistics will be computed for blocks of variables of size
         "buffer_size" at a time. This is option significantly reduces the
         memory requirements when n_jobs > 1 and memory sharing between
@@ -1460,11 +1468,11 @@ def spatio_temporal_cluster_test(
     Returns
     -------
     t_obs : array, shape (n_times * n_vertices,)
-        Statistic (t by default) observed for all variables
+        Statistic (t by default) observed for all variables.
     clusters : list
         List type defined by out_type above.
     cluster_pv: array
-        P-value for each cluster
+        P-value for each cluster.
     H0 : array, shape (n_permutations,)
         Max cluster level stats observed under permutation.
 
@@ -1562,7 +1570,7 @@ def _reshape_clusters(clusters, sample_shape):
     return clusters
 
 
-def summarize_clusters_stc(clu, p_thresh=0.05, tstep=1e-3, tmin=0,
+def summarize_clusters_stc(clu, p_thresh=0.05, tstep=1.0, tmin=0,
                            subject='fsaverage', vertices=None):
     """Assemble summary SourceEstimate from spatiotemporal cluster results.
 
@@ -1572,11 +1580,14 @@ def summarize_clusters_stc(clu, p_thresh=0.05, tstep=1e-3, tmin=0,
     Parameters
     ----------
     clu : tuple
-        the output from clustering permutation tests.
+        The output from clustering permutation tests.
     p_thresh : float
         The significance threshold for inclusion of clusters.
     tstep : float
-        The temporal difference between two time samples.
+        The time step between samples of the original :class:`STC
+        <mne.SourceEstimate>`, in seconds (i.e., ``1 / stc.sfreq``). Defaults
+        to ``1``, which will yield a colormap indicating cluster duration
+        measured in *samples* rather than *seconds*.
     tmin : float | int
         The time of the first sample.
     subject : str
@@ -1591,7 +1602,8 @@ def summarize_clusters_stc(clu, p_thresh=0.05, tstep=1e-3, tmin=0,
         A summary of the clusters. The first time point in this SourceEstimate
         object is the summation of all the clusters. Subsequent time points
         contain each individual cluster. The magnitude of the activity
-        corresponds to the length the cluster spans in time (in samples).
+        corresponds to the duration spanned by the cluster (duration units are
+        determined by ``tstep``).
     """
     if vertices is None:
         vertices = [np.arange(10242), np.arange(10242)]
@@ -1615,7 +1627,7 @@ def summarize_clusters_stc(clu, p_thresh=0.05, tstep=1e-3, tmin=0,
         data[v_inds, t_inds] = t_obs[t_inds, v_inds]
         # Store a nice visualization of the cluster by summing across time
         data = np.sign(data) * np.logical_not(data == 0) * tstep
-        data_summary[:, ii + 1] = 1e3 * np.sum(data, axis=1)
+        data_summary[:, ii + 1] = np.sum(data, axis=1)
         # Make the first "time point" a sum across all clusters for easy
         # visualization
     data_summary[:, 0] = np.sum(data_summary, axis=1)
